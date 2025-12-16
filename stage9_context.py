@@ -42,28 +42,37 @@ class AuctionContext:
 
     def allow_trade(self, candle, side: str) -> bool:
         """
-        Determin-es if a trade is allowed based on auction theory principles.
-        - LONG trades are favored when the price is near the Value Area Low (VAL).
-        - SHORT trades are favored when the price is near the Value Area High (VAH).
+        Determines if a trade is allowed based on the market regime identified
+        by the volume profile.
+        - In balanced markets, it favors mean-reversion trades.
+        - In unbalanced markets, it favors trend-following trades.
         """
         self._update_candles(candle)
 
-        candle_count = len(self.candles[candle.symbol])
-        if candle_count < self.lookback:
+        if len(self.candles.get(candle.symbol, [])) < self.lookback:
             return False
 
         vp = self._get_volume_profile(candle.symbol)
-
-        if not vp or not vp.vah or not vp.val:
+        if not all([vp, vp.poc, vp.vah, vp.val]):
             return False
 
-        vah_proximity_threshold = (vp.vah - vp.val) * 0.50
-        val_proximity_threshold = (vp.vah - vp.val) * 0.50
+        # --- Regime-Based Logic ---
 
-        if side == "LONG":
-            return candle.close <= (vp.val + val_proximity_threshold)
+        # 1. Balanced Market (Mean Reversion)
+        if vp.is_balanced:
+            if side == "LONG" and candle.close <= vp.val:
+                return True
+            if side == "SHORT" and candle.close >= vp.vah:
+                return True
 
-        if side == "SHORT":
-            return candle.close >= (vp.vah - vah_proximity_threshold)
+        # 2. Unbalanced Market (Trend Following)
+        else:
+            dominant_side = vp.dominant_side
+            if side == "LONG" and dominant_side == "BUYER" and candle.close <= vp.poc:
+                # Buy on pullbacks to the POC in an uptrend
+                return True
+            if side == "SHORT" and dominant_side == "SELLER" and candle.close >= vp.poc:
+                # Sell on rallies to the POC in a downtrend
+                return True
 
         return False

@@ -97,3 +97,31 @@ class VolumeProfile:
                 lower_ix -= 1
 
         return vah, val
+
+    @property
+    def is_balanced(self) -> bool:
+        """
+        Checks if the profile is balanced (bell-shaped).
+        A simple heuristic is if the POC is near the midpoint of the value area.
+        """
+        if not self.poc or not self.vah or not self.val:
+            return False
+
+        midpoint = self.val + (self.vah - self.val) / 2
+        # Check if POC is within, say, 20% of the VA range from the midpoint
+        tolerance = (self.vah - self.val) * 0.20
+        return abs(self.poc - midpoint) <= tolerance
+
+    @property
+    def dominant_side(self) -> Optional[str]:
+        """
+        Determines if there is a buying or selling dominance.
+        - 'BUYER' if POC is in the upper half of the value area.
+        - 'SELLER' if POC is in the lower half of the value area.
+        """
+        if not self.is_balanced:
+            if self.poc > self.val + (self.vah - self.val) / 2:
+                return "BUYER"
+            else:
+                return "SELLER"
+        return None

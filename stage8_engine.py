@@ -53,11 +53,11 @@ class TradeEngine:
             return self.open_trades
         else :
             return {}
-    def get_open_trade(self, symbol)->Trade:
-        self.open_trades.get('symbol')
+    def get_open_trade(self, symbol) -> Trade:
+        return self.open_trades.get(symbol)
 
     def enter_trade(self, trade: Trade):
-        print(trade.stop_price)
+        print(f"Entering trade: {trade.symbol} @ {trade.entry_price}, SL: {trade.stop_price}")
         self.open_trades[trade.symbol] = trade
 
     # def exit_trade(self, symbol: str, price: float, ts: int, reason: str):
@@ -306,6 +306,7 @@ class LiveAuctionEngine:
             stop_price=stop_price
         )
 
+        self.trade_engine.enter_trade(trade)
         self.stage12.on_trade_entry(trade, last_atr)
         self.persistence.save_open_trade(trade)
 
