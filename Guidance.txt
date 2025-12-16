@@ -1,0 +1,229 @@
+1. First Principles: What You Are Actually Trying to Detect
+
+All the concepts you mentioned reduce to auction theory + order flow imbalance expressed at different time resolutions.
+
+Trading Concept	What it means in data
+Auction failure	Aggression enters, price does not continue
+Liquidity sweep	Stops triggered beyond structure, followed by absorption
+Buyer in control	Sustained aggressive buying with higher acceptance
+High-volume pivot	Price level with large executed volume + rejection
+Break vs fake break	Acceptance above level vs rejection after effort
+
+Key Insight
+
+Market structure comes from candles; market intent comes from ticks.
+
+You must never infer structure from ticks or intent from candles alone.
+
+2. Data Roles (Hard Separation)
+A. Tick (WSS) Data — Intent & Execution
+
+Used ONLY for:
+
+Aggressive volume (buy vs sell)
+
+Absorption
+
+Delta / imbalance
+
+Footprint statistics
+
+Micro acceptance / rejection
+
+B. Candle Data — Context & Structure
+
+Used ONLY for:
+
+Swing highs/lows
+
+Value areas
+
+HTF trend & bias
+
+Range vs trend regime
+
+Key reference levels
+
+❌ Do not calculate EMAs, RSI, etc. on tick data
+❌ Do not infer buyer/seller control from candles alone
+
+3. Canonical Architecture (Deterministic)
+                  ┌────────────────────┐
+WSS Tick Feed ───▶│ Tick Aggregator     │──┐
+                  │ (100–500 ms bins)   │  │
+                  └────────────────────┘  │
+                                           ▼
+                  ┌────────────────────┐  ┌─────────────────────┐
+REST Candles ───▶ │ Structure Engine   │  │ Orderflow Engine    │
+(1/5/15/60/D)     │ (HTF/LTF context)  │  │ (footprint, delta) │
+                  └────────────────────┘  └─────────────────────┘
+                           │                        │
+                           └──────────┬─────────────┘
+                                      ▼
+                           ┌────────────────────────┐
+                           │ Market State Engine    │
+                           │ (who is in control?)   │
+                           └────────────────────────┘
+                                      ▼
+                           ┌────────────────────────┐
+                           │ Event Detectors        │
+                           │ (sweep, failure, etc.) │
+                           └────────────────────────┘
+                                      ▼
+                           ┌────────────────────────┐
+                           │ Trade Decision Layer   │
+                           └────────────────────────┘
+
+4. Step 1: Market Structure Engine (Candles)
+
+This is non-negotiable.
+
+Core Outputs (per timeframe)
+
+Swing High / Swing Low
+
+Range High / Low
+
+Value Area High / Low (from volume profile)
+
+Trend State: UP / DOWN / RANGE
+
+Structure Break vs Structure Hold
+
+Example (1-min + 15-min)
+structure_state = {
+    "ltf_trend": "UP",
+    "htf_trend": "UP",
+    "range_high": 20125,
+    "range_low": 20080,
+    "last_swing_high": 20110,
+    "last_swing_low": 20095,
+    "key_levels": [20100, 20050]
+}
+
+
+⚠️ Rule
+
+If HTF structure is unclear → system reduces trade size or disables reversals.
+
+5. Step 2: Tick → Footprint Engine (Intent)
+
+Aggregate ticks into price buckets (not time candles).
+
+Required Metrics per price level
+
+Bid Volume
+
+Ask Volume
+
+Delta (Ask − Bid)
+
+Total Volume
+
+Imbalance ratio
+
+Absorption flags
+
+price_bucket = {
+    "price": 20102,
+    "bid_vol": 1250,
+    "ask_vol": 3400,
+    "delta": +2150,
+    "imbalance": 2.7,
+    "absorption": True
+}
+
+Key Patterns You Detect
+Pattern	Data Signature
+Aggressive buying	High ask volume + positive delta
+Absorption	High volume, little price movement
+Failed auction	High delta, no continuation
+Acceptance	Volume builds and price holds
+6. Step 3: Market State Engine (Control Logic)
+
+This layer answers:
+
+Who is in control right now?
+
+Buyer Control Conditions (example)
+HTF trend = UP
+AND price above VWAP/value
+AND cumulative delta positive
+AND pullbacks show absorption (bid holds)
+
+Output
+market_state = {
+    "control": "BUYER",
+    "strength": 0.72,
+    "regime": "TREND"
+}
+
+
+This prevents counter-trend stupidity.
+
+7. Step 4: Event Detectors (Your Core Edge)
+A. Liquidity Sweep + Reversal
+1. Price breaks HTF swing high/low
+2. Spike in aggressive volume
+3. Immediate absorption
+4. Delta divergence
+5. Failure to accept above level
+
+
+Tick signature
+
+High volume at extreme
+
+Delta flips
+
+Price stalls
+
+B. Auction Failed
+Effort ≠ Result
+
+if delta > threshold and price_change < min_tick_move:
+    auction_failed = True
+
+C. Break vs Fake Break
+Condition	Interpretation
+High volume + hold	True breakout
+High volume + rejection	Fake break
+D. High-Volume Pivot Reversal
+1. Large volume node forms
+2. Subsequent retest has low delta
+3. Opposite aggression wins
+
+8. Triggering Logic (Simplified, Deterministic)
+
+Triggers fire only at predefined locations
+
+Location Filters
+
+HTF swing
+
+Value area edges
+
+Range high/low
+
+VWAP deviation
+
+Example Trigger
+if (
+    location == "HTF_LOW"
+    and market_state.control == "SELLER"
+    and auction_failed
+    and delta_flip_confirmed
+):
+    trigger_long()
+
+
+No indicators. No randomness.
+
+9. Multi-Timeframe Synchronization Rule
+Timeframe	Role
+Daily / 1H	Bias, range
+15-min	Structure
+1-min	Entry location
+Tick	Execution & confirmation
+
+❌ Never enter using tick data without candle-based location.
