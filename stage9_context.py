@@ -57,8 +57,8 @@ class AuctionContext:
         if not vp or not vp.vah or not vp.val:
             return False
 
-        vah_proximity_threshold = (vp.vah - vp.val) * 0.25
-        val_proximity_threshold = (vp.vah - vp.val) * 0.25
+        vah_proximity_threshold = (vp.vah - vp.val) * 0.50
+        val_proximity_threshold = (vp.vah - vp.val) * 0.50
 
         if side == "LONG":
             return candle.close <= (vp.val + val_proximity_threshold)
