@@ -47,7 +47,7 @@ class TradeEngine:
 
     def get_open_trade_count(self) -> int:
         return len(self.open_trades)
-    
+
     def get_open_trades_list(self) -> int:
         if self.open_trades:
             return self.open_trades
@@ -55,11 +55,11 @@ class TradeEngine:
             return {}
     def get_open_trade(self, symbol)->Trade:
         self.open_trades.get('symbol')
-    
+
     def enter_trade(self, trade: Trade):
         print(trade.stop_price)
         self.open_trades[trade.symbol] = trade
-    
+
     # def exit_trade(self, symbol: str, price: float, ts: int, reason: str):
     def exit_trade(self, symbol: str, price: float, ts: int, reason: str,pnl:float):
         trade = self.open_trades.pop(symbol, None)
@@ -70,8 +70,8 @@ class TradeEngine:
         trade.reason = reason
         trade.pnl
 
- 
-        self.closed_trades.append(trade) 
+
+        self.closed_trades.append(trade)
         print(
             "STAGE 8 ENGINE - TRADE ENGINE -->[EXIT]",
             trade.symbol,
@@ -86,20 +86,20 @@ class TradeEngine:
 # Auction / Strategy Engine
 # -------------------------
 from stage12_stop_normalization import TradeEngine as V12TradeEngine
-from stage9_context import Stage9ContextFilter
+from stage9_context import AuctionContext
 class LiveAuctionEngine:
     def __init__(self):
         self.trade_engine = TradeEngine()
-        # self.V12_tradeEngine = V12TradeEngine()   
-        self.structure: Dict[str, List[StructureLevel]] = {}        
+        # self.V12_tradeEngine = V12TradeEngine()
+        self.structure: Dict[str, List[StructureLevel]] = {}
         self.last_candle_ts: Dict[str, int] = {}
         self.persistence = MongoPersistence()
         self.open_trades = {}
         self.loadFromDb()
 
-        self.context_filter = Stage9ContextFilter(
-            lookback=5,
-            min_alignment=3
+        self.context_filter = AuctionContext(
+            lookback=10,
+            tick_size=0.05
         )
         # ---- inside LiveAuctionEngine.__init__ ----
         self.add_logic = Stage10AddLogic(
@@ -112,7 +112,7 @@ class LiveAuctionEngine:
             cooldown_candles=5
         )
 
-        
+
         self.stage12 = Stage12Controller(
                         trade_engine=self.trade_engine,
                         persistence=self.persistence
@@ -142,7 +142,7 @@ class LiveAuctionEngine:
         self.trade_engine.open_trades = {}
 
         for doc in self.persistence.load_open_trades():
-            
+
             trade = Trade(
                 symbol=doc["symbol"],
                 side=doc["side"],
@@ -154,9 +154,9 @@ class LiveAuctionEngine:
             )
             self.trade_engine.open_trades[trade.symbol] = trade
 
-        
+
         for doc in self.persistence.load_closed_trades():
-            
+
             trade = Trade(
                 symbol=doc["symbol"],
                 side=doc["side"],
@@ -185,7 +185,7 @@ class LiveAuctionEngine:
 
     # def on_tick(self, tick: Tick):
         # ticks only manage exits
-    
+
         # self.stage12.on_tick(
         #         symbol=tick.symbol,
         #         ltp=tick.ltp,
@@ -200,7 +200,7 @@ class LiveAuctionEngine:
         exit_signal = self.stage12.evaluate_exit(
             trade=trade,
             ltp=tick.ltp
-            
+
         )
 
         if exit_signal is None:
@@ -236,7 +236,7 @@ class LiveAuctionEngine:
             self.cooldown.record_stop(tick.symbol, tick.ts)
 
         self.add_logic.reset(tick.symbol)
-            
+
 
 
     def _allow_entry(self, candle, side: str) -> bool:
@@ -264,93 +264,50 @@ class LiveAuctionEngine:
     def on_candle_close(self, candle: Candle):
         self.stage12.on_candle_close(candle)
         self.last_candle_ts[candle.symbol] = candle.ts
-        self.context_filter.update_from_candle(candle)
 
-        
         last_ts = self.persistence.get_last_candle_ts(candle.symbol)
         if last_ts is not None and candle.ts <= last_ts:
             return  # already processed
         self.persistence.update_last_candle_ts(candle.symbol, candle.ts)
 
-        levels = self.structure.setdefault(candle.symbol, [])
+        if self.trade_engine.has_open_trade(candle.symbol):
+            return
 
-        # simplistic structure creation
-        level =  StructureLevel(
-                
-                price=candle.close,
-                side="LONG" if candle.close > candle.open else "SHORT",
-                created_ts=candle.ts,
-                symbol=candle.symbol,
-            )
-        levels.append(level)
-        self.persistence.upsert_level(level)
-
-        # entry logic
         # ============================
-        # ENTRY LOGIC
+        # AUCTION-THEORY ENTRY LOGIC
         # ============================
-        for lvl in levels:
-            if lvl.last_used_ts is not None:
-                continue
 
-            if self.trade_engine.has_open_trade(candle.symbol):
-                break
+        # Determine trade side based on auction context
+        if self.context_filter.allow_trade(candle, "LONG"):
+            side = "LONG"
+        elif self.context_filter.allow_trade(candle, "SHORT"):
+            side = "SHORT"
+        else:
+            return
 
-            if (
-                lvl.side == "LONG"
-                and candle.close > lvl.price
-                and self.context_filter.allow_trade(candle.symbol, "LONG")
-                and self.bias_guard.allow_trade(candle.symbol, "LONG",candle.ts )
-                and self.directionaBias_guard.allow_trade(candle.symbol, "LONG")
-                and self._allow_entry(candle, "LONG")
-            ):
-                last_atr = self.stage12.atr_tracker.get_atr(candle.symbol)
-                if last_atr is None:
-                    return  # do not trade until ATR is ready
-                stop_price =self.stage12.stop_normalizer.compute_initial_stop(candle.close,"LONG",last_atr)
-                trade = Trade(
-                    symbol=candle.symbol,
-                    side="LONG",
-                    entry_price=candle.close,
-                    entry_ts=candle.ts,
-                    stop_price=stop_price
-                )
-                print(trade)
-                # self.trade_engine.enter_trade(trade)
-                self.stage12.on_trade_entry(trade, last_atr)
-                self.persistence.save_open_trade(trade)
-                lvl.last_used_ts = candle.ts
-                self.persistence.upsert_level(lvl)
-                break
+        # Check bias guards and cooldowns
+        if not self.bias_guard.allow_trade(candle.symbol, side, candle.ts) or \
+           not self.directionaBias_guard.allow_trade(candle.symbol, side) or \
+           not self._allow_entry(candle, side):
+            return
 
-            elif (
-                lvl.side == "SHORT"
-                and candle.close < lvl.price
-                and self.context_filter.allow_trade(candle.symbol, "SHORT")
-                and self.bias_guard.allow_trade(candle.symbol, "SHORT", candle.ts)
-                and self.directionaBias_guard.allow_trade(candle.symbol, "SHORT")
-                and self._allow_entry(candle, "SHORT")
-            ):
-                
-                last_atr = self.stage12.atr_tracker.get_atr(candle.symbol)
-                if last_atr is None:
-                    return  # do not trade until ATR is ready
-                
-                stop_price =self.stage12.stop_normalizer.compute_initial_stop(candle.close,"SHORT",last_atr)
-                trade = Trade(
-                    symbol=candle.symbol,
-                    side="SHORT",
-                    entry_price=candle.close,
-                    entry_ts=candle.ts,
-                    stop_price=stop_price
-                )
-                # self.trade_engine.enter_trade(trade)
-                print(trade)
-                self.stage12.on_trade_entry(trade, last_atr)
-                self.persistence.save_open_trade(trade)
-                lvl.last_used_ts = candle.ts
-                self.persistence.upsert_level(lvl)
-                break
+        # Get ATR for stop placement
+        last_atr = self.stage12.atr_tracker.get_atr(candle.symbol)
+        if last_atr is None:
+            return  # Do not trade until ATR is ready
+
+        # Execute trade
+        stop_price = self.stage12.stop_normalizer.compute_initial_stop(candle.close, side, last_atr)
+        trade = Trade(
+            symbol=candle.symbol,
+            side=side,
+            entry_price=candle.close,
+            entry_ts=candle.ts,
+            stop_price=stop_price
+        )
+
+        self.stage12.on_trade_entry(trade, last_atr)
+        self.persistence.save_open_trade(trade)
 
 
         # ============================
@@ -368,7 +325,7 @@ class LiveAuctionEngine:
                 self.persistence.update_open_trade(trade)
                 self.add_logic.register_add(candle.symbol)
 
-        
+
 
 
 # -------------------------
@@ -384,7 +341,7 @@ class LiveMarketRouter:
         Returns (ltp, ts) or (None, None) if not available
         """
 
-         
+
 
         # INDEX
         if "indexFF" in ff:
@@ -428,31 +385,32 @@ class LiveMarketRouter:
                 )
 
             # ---- candle close from WSS snapshot ----
-            ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
-            for o in ohlc_list:
-                try :
-                    if "interval" in o:
-                        if o["interval"] == "I1":
-                            candle_ts = int(o["ts"])
-                            if self.engine.last_candle_ts.get(symbol) == candle_ts:
-                                continue
+            if market and "marketOHLC" in market:
+                ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
+                for o in ohlc_list:
+                    try :
+                        if "interval" in o:
+                            if o["interval"] == "I1":
+                                candle_ts = int(o["ts"])
+                                if self.engine.last_candle_ts.get(symbol) == candle_ts:
+                                    continue
 
-                            candle = Candle(
-                                symbol=symbol,
-                                open=float(o["open"]),
-                                high=float(o["high"]),
-                                low=float(o["low"]),
-                                close=float(o["close"]),
-                                volume=float(o.get("vol", 0)),
-                                ts=candle_ts,
-                            )
-                            self.engine.on_candle_close(candle)
-                except :
-                    import traceback
-                    traceback.print_exc()
-                    # print(" RECEIVED ")
-                    # print(data)
-                    # exit(0)
+                                candle = Candle(
+                                    symbol=symbol,
+                                    open=float(o["open"]),
+                                    high=float(o["high"]),
+                                    low=float(o["low"]),
+                                    close=float(o["close"]),
+                                    volume=float(o.get("vol", 0)),
+                                    ts=candle_ts,
+                                )
+                                self.engine.on_candle_close(candle)
+                    except :
+                        import traceback
+                        traceback.print_exc()
+                        # print(" RECEIVED ")
+                        # print(data)
+                        # exit(0)
 
 
 # -------------------------
@@ -474,4 +432,3 @@ class Monitor:
                 f"closed_trades={len(self.engine.trade_engine.closed_trades)}"
             )
             time.sleep(5)
-
