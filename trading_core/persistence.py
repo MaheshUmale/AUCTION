@@ -115,6 +115,12 @@ class QuestDBPersistence:
                     volume DOUBLE
                 ) timestamp(ts);
                 """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS raw_wss_feed (
+                    ts TIMESTAMP,
+                    raw_json STRING
+                ) timestamp(ts);
+                """)
 
     def upsert_level(self, level: StructureLevel):
         with Sender.from_conf(self.conf) as sender:
@@ -286,3 +292,13 @@ class QuestDBPersistence:
                 cur.execute(query, (symbol, from_date, to_date))
                 rows = cur.fetchall()
                 return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
+
+    def save_raw_wss_feed(self, ts: int, raw_json: str):
+        with Sender(self.ingest_host, self.ingest_port) as sender:
+            sender.row(
+                'raw_wss_feed',
+                columns={
+                    'raw_json': raw_json,
+                },
+                at=ts
+            )

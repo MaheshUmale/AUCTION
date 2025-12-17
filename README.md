@@ -88,3 +88,18 @@ python3 main_live.py
 ```
 
 The bot will then connect to the Upstox WebSocket feed, and the monitor will print a summary of open and closed trades to the console every 5 seconds.
+
+## Dataflow and Replay
+
+The trading bot is designed to store all incoming WebSocket feed data in a raw format, which allows for high-fidelity backtesting and replay of market data. This is achieved by storing the raw JSON data from the WebSocket feed in the `raw_wss_feed` table in the QuestDB database.
+
+### Data Storage
+
+-   **Table:** `raw_wss_feed`
+-   **Columns:**
+    -   `ts`: The timestamp of the message, in nanoseconds.
+    -   `raw_json`: The raw JSON data from the WebSocket feed, as a string.
+
+### Data Replay
+
+The data stored in the `raw_wss_feed` table can be used to rehydrate the trading engine and replay the market data for backtesting or analysis. This is done by querying the table for a specific time range and then feeding the `raw_json` data back into the `LiveMarketRouter.on_message` method. This allows for a more accurate simulation of live market conditions, as it includes all the nuances of the real-time data feed.

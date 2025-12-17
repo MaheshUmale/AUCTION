@@ -782,6 +782,15 @@ class LiveMarketRouter:
         feeds = data.get("feeds", {})
         current_ts = int(data.get("currentTs", time.time() * 1000))
 
+        # Save the raw message for replay
+        try:
+            # QuestDB sender expects timestamp in nanoseconds
+            ts_nanos = current_ts * 1_000_000
+            raw_json_str = json.dumps(data)
+            self.engine.persistence.save_raw_wss_feed(ts=ts_nanos, raw_json=raw_json_str)
+        except Exception as e:
+            print(f"Error saving raw WSS feed: {e}")
+
         for symbol, feed in feeds.items():
             ff = feed.get("fullFeed", {})
             market = ff.get("marketFF") or ff.get("indexFF")
