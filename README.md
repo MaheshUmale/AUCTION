@@ -91,15 +91,13 @@ The bot will then connect to the Upstox WebSocket feed, and the monitor will pri
 
 ## Dataflow and Replay
 
-The trading bot is designed to store all incoming WebSocket feed data in a raw format, which allows for high-fidelity backtesting and replay of market data. This is achieved by storing the raw JSON data from the WebSocket feed in the `raw_wss_feed` table in the QuestDB database.
+The trading bot is designed to store all incoming WebSocket feed data in a structured format, which allows for efficient querying and high-fidelity backtesting. All feed data, including ticks, candles, and order book updates, is stored in the `tick_data` table in QuestDB.
 
 ### Data Storage
 
--   **Table:** `raw_wss_feed`
--   **Columns:**
-    -   `ts`: The timestamp of the message, in nanoseconds.
-    -   `raw_json`: The raw JSON data from the WebSocket feed, as a string.
+-   **Table:** `tick_data`
+-   **Schema:** The table stores various fields from the WebSocket feed, including LTP, LTQ, open, high, low, close, and order book data. A `feed_type` column distinguishes between different types of data (e.g., `TICK`, `CANDLE_I1`).
 
 ### Data Replay
 
-The data stored in the `raw_wss_feed` table can be used to rehydrate the trading engine and replay the market data for backtesting or analysis. This is done by querying the table for a specific time range and then feeding the `raw_json` data back into the `LiveMarketRouter.on_message` method. This allows for a more accurate simulation of live market conditions, as it includes all the nuances of the real-time data feed.
+The structured data in the `tick_data` table can be queried to reconstruct the market state at any given time. This allows for accurate backtesting and analysis by replaying historical data through the trading engine.

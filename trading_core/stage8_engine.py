@@ -750,6 +750,76 @@ class LiveMarketRouter:
     def __init__(self, engine: LiveAuctionEngine):
         self.engine = engine
 
+    def _save_feed_data(self, symbol: str, feed: dict):
+        now = datetime.now()
+        full_feed = feed.get("fullFeed", {})
+        market = full_feed.get("marketFF") or full_feed.get("indexFF")
+
+        if not market:
+            return
+
+        # 1. Process Tick and associated data
+        ltpc = market.get('ltpc')
+        if ltpc and 'ltp' in ltpc and 'ltt' in ltpc:
+            record = {
+                'timestamp': int(ltpc['ltt']) * 1_000_000,
+                'instrument_key': symbol,
+                'feed_type': 'TICK',
+                'insertion_time': now,
+                'ltp': ltpc.get('ltp'),
+                'ltq': ltpc.get('ltq'),
+                'cp': market.get('cp'),
+                'oi': market.get('oi'),
+                'atp': market.get('atp'),
+                'vtt': market.get('vtt'),
+                'tbq': market.get('tbq'),
+                'tsq': market.get('tsq'),
+            }
+
+            market_level = market.get('marketLevel', {})
+            quotes = market_level.get('bidAskQuote', [])
+            if quotes:
+                record['bid_price_1'] = quotes[0].get('bidP')
+                record['bid_qty_1'] = quotes[0].get('bidQ')
+                record['ask_price_1'] = quotes[0].get('askP')
+                record['ask_qty_1'] = quotes[0].get('askQ')
+
+            option_greeks = full_feed.get('optionGreeks')
+            if option_greeks:
+                record.update({
+                    'delta': option_greeks.get('delta'),
+                    'theta': option_greeks.get('theta'),
+                    'gamma': option_greeks.get('gamma'),
+                    'vega': option_greeks.get('vega'),
+                    'rho': option_greeks.get('rho'),
+                    'iv': option_greeks.get('iv'),
+                })
+
+            try:
+                self.engine.persistence.save_tick_data(record)
+            except Exception as e:
+                print(f"Error saving tick data: {e}")
+
+        # 2. Process Candle Data
+        ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
+        for ohlc in ohlc_list:
+            if "interval" in ohlc:
+                candle_record = {
+                    'timestamp': int(ohlc['ts']) * 1_000_000,
+                    'instrument_key': symbol,
+                    'feed_type': f'CANDLE_{ohlc["interval"]}',
+                    'insertion_time': now,
+                    'open': ohlc.get('open'),
+                    'high': ohlc.get('high'),
+                    'low': ohlc.get('low'),
+                    'close': ohlc.get('close'),
+                    'vtt': ohlc.get('vol')
+                }
+                try:
+                    self.engine.persistence.save_tick_data(candle_record)
+                except Exception as e:
+                    print(f"Error saving candle data: {e}")
+
     def _extract_ltp_ts(self, ff: dict):
         """
         Returns (ltp, ts) or (None, None) if not available
@@ -782,16 +852,13 @@ class LiveMarketRouter:
         feeds = data.get("feeds", {})
         current_ts = int(data.get("currentTs", time.time() * 1000))
 
-        # Save the raw message for replay
-        try:
-            # QuestDB sender expects timestamp in nanoseconds
-            ts_nanos = current_ts * 1_000_000
-            raw_json_str = json.dumps(data)
-            self.engine.persistence.save_raw_wss_feed(ts=ts_nanos, raw_json=raw_json_str)
-        except Exception as e:
-            print(f"Error saving raw WSS feed: {e}")
-
         for symbol, feed in feeds.items():
+            # Save structured feed data
+            try:
+                self._save_feed_data(symbol, feed)
+            except Exception as e:
+                print(f"[ERROR] Failed to save feed data for {symbol}: {e}")
+
             ff = feed.get("fullFeed", {})
             market = ff.get("marketFF") or ff.get("indexFF")
             if not market:
