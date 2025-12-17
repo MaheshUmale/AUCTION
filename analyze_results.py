@@ -18,6 +18,7 @@ def analyze():
     # Ensure numeric pnl
     df["pnl"] = pd.to_numeric(df["pnl"])
     
+    
     # Calculate Duration (in minutes)
     # Timestamps are likely in milliseconds? Let's check.
     # If exit_ts or entry_ts are huge, they are ms.
