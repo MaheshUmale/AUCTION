@@ -7,8 +7,8 @@ import requests
 from datetime import datetime, timedelta
 from typing import List, Dict
 import config
-from persistence import QuestDBPersistence
-from models import Candle
+from trading_core.persistence import QuestDBPersistence
+from trading_core.models import Candle
 
 class HistoricalDataFetcher:
     """

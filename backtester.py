@@ -23,7 +23,8 @@ def run_backtest(symbol: str, from_date: str, to_date: str):
     engine.loadFromDb()
     router = LiveMarketRouter(engine)
 
-    # 2. Fetch Historical Data from QuestDB
+    try:
+        # 2. Fetch Historical Data from QuestDB
     ticks = persistence.fetch_tick_data(symbol, from_date, to_date)
     if not ticks:
         print(f"No data found for {symbol} in the given date range.")
@@ -53,16 +54,16 @@ def run_backtest(symbol: str, from_date: str, to_date: str):
         }
         router.on_message(message)
 
-    # 4. Summarize and Plot Results
-    trades = engine.trade_engine.closed_trades
-    if trades:
-        summarize(trades)
-        # The plotting function needs to be adapted to the new structure.
-        # plotMe(symbol, ohlc_data, trades)
-    else:
-        print("No trades were executed during the backtest.")
+        # 4. Summarize and Plot Results
+        trades = engine.trade_engine.closed_trades
+        if trades:
+            summarize(trades)
+        else:
+            print("No trades were executed during the backtest.")
 
-    print("Backtest complete.")
+    finally:
+        router.shutdown()
+        print("Backtest complete.")
 
 def summarize(trades):
     """Summarizes the performance of a list of trades."""
