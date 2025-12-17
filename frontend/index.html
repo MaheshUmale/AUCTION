@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pro Footprint Trader</title>
+  <!-- Premium Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <!-- Top Navigation / Controls -->
+  <div id="top-bar">
+    <div class="brand">FP CHART</div>
+
+    <div class="search-container">
+      <input type="text" id="symbolSearch" placeholder="Search Instrument..." autocomplete="off">
+      <div id="searchResults" class="dropdown-content"></div>
+    </div>
+
+    <!-- Future Controls can go here -->
+  </div>
+
+  <!-- Main Workspace -->
+  <div id="main-container">
+
+    <!-- Footprint Chart Area -->
+    <div id="chart-container">
+      <canvas id="fpCanvas"></canvas>
+      <div id="msgOverlay" class="overlay-message">Select a Symbol</div>
+    </div>
+
+    <!-- DOM / Order Flow Area -->
+    <div id="dom-panel">
+      <div class="panel-header">Depth of Market</div>
+      <canvas id="domCanvas" width="280" height="800"></canvas>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>

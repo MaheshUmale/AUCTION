@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Live Footprint + DOM</title>
+<style>
+body { margin:0; font-family: monospace; background:#222; color:#eee; }
+#top { padding:8px; background:#111; }
+select { background:#333; color:#fff; padding:4px; }
+#container { display:flex; height:calc(100vh - 40px); }
+canvas { background:#3a3a3a; display:block; }
+#fp { flex:1; }
+#dom { width:260px; border-left:1px solid #555; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  Symbol: <select id="symbolSelect"></select>
+</div>
+
+<div id="container">
+  <canvas id="fp" width="1000" height="600"></canvas>
+  <canvas id="dom" width="260" height="600"></canvas>
+</div>
+
+<script>
+const fpCanvas = document.getElementById("fp");
+const domCanvas = document.getElementById("dom");
+const fpCtx = fpCanvas.getContext("2d");
+const domCtx = domCanvas.getContext("2d");
+const symbolSelect = document.getElementById("symbolSelect");
+
+let symbols = [];
+let selectedSymbol = null;
+let footprintBars = [];
+let domState = { bids:{}, asks:{} };
+
+const MAX_BARS = 50;
+const LEVEL_HEIGHT = 14;
+
+const ws = new WebSocket("ws://localhost:8000/ws");
+
+ws.onopen = () => console.log("[WS] connected");
+
+ws.onmessage = e => {
+  const msg = JSON.parse(e.data);
+
+  // dynamically populate symbols
+  if(msg.symbol && !symbols.includes(msg.symbol)){
+    symbols.push(msg.symbol);
+    const opt = document.createElement("option");
+    opt.value = opt.text = msg.symbol;
+    symbolSelect.appendChild(opt);
+    if(!selectedSymbol){
+      selectedSymbol = msg.symbol;
+      symbolSelect.value = selectedSymbol;
+    }
+  }
+
+  // footprint messages
+  if(msg.type === "footprint" && msg.symbol === selectedSymbol){
+    if(!msg.levels || Object.keys(msg.levels).length===0) return;
+    footprintBars.push(msg);
+    if(footprintBars.length > MAX_BARS) footprintBars.shift();
+    drawFootprint();
+  }
+
+  // DOM messages
+  if(msg.type === "dom" && msg.symbol === selectedSymbol){
+    domState = msg;
+    drawDOM();
+  }
+};
+
+// symbol change handler
+symbolSelect.onchange = () => {
+  selectedSymbol = symbolSelect.value;
+  footprintBars = [];
+  domState = { bids:{}, asks:{} };
+  drawFootprint();
+  drawDOM();
+};
+
+/* ------------------ DRAW FOOTPRINT ------------------ */
+function drawFootprint(){
+  fpCtx.clearRect(0,0,fpCanvas.width,fpCanvas.height);
+  if(footprintBars.length === 0) return;
+
+  const prices = [];
+  footprintBars.forEach(b => {
+    if(b.levels){
+      Object.keys(b.levels).forEach(p => prices.push(parseFloat(p)));
+    }
+  });
+  if(prices.length === 0) return;
+
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const priceSpan = maxPrice - minPrice || 1;
+  const barWidth = fpCanvas.width / MAX_BARS;
+
+  footprintBars.forEach((bar,i)=>{
+    const x = i * barWidth;
+    if(!bar.levels) return;
+    Object.entries(bar.levels).forEach(([priceStr,v])=>{
+      const price = parseFloat(priceStr);
+      const y = fpCanvas.height - ((price - minPrice)/priceSpan)*fpCanvas.height - LEVEL_HEIGHT;
+
+      const imbalance = (v.ask||0) - (v.bid||0);
+      const heat = Math.min(Math.abs(imbalance)/50,1);
+
+      fpCtx.fillStyle = imbalance>=0 ? `rgba(0,180,0,${0.2+heat})` : `rgba(200,0,0,${0.2+heat})`;
+      fpCtx.fillRect(x, y, barWidth-1, LEVEL_HEIGHT);
+
+      fpCtx.fillStyle = "#000";
+      fpCtx.font = "10px Arial";
+      fpCtx.fillText(`${v.bid||0}|${v.ask||0}`, x+2, y+11);
+    });
+  });
+}
+
+/* ------------------ DRAW DOM ------------------ */
+function drawDOM(){
+  domCtx.clearRect(0,0,domCanvas.width,domCanvas.height);
+  let y = 20;
+  domCtx.font = "12px Arial";
+
+  domCtx.fillStyle = "#ff6b6b";
+  Object.entries(domState.asks||{}).forEach(([p,q])=>{
+    domCtx.fillText(`${p}  ${q}`,10,y);
+    y+=14;
+  });
+
+  y+=10;
+  domCtx.fillStyle = "#6bff6b";
+  Object.entries(domState.bids||{}).forEach(([p,q])=>{
+    domCtx.fillText(`${p}  ${q}`,10,y);
+    y+=14;
+  });
+}
+</script>
+
+</body>
+</html>

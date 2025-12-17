@@ -6,15 +6,21 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import time
 import threading
+from datetime import datetime
 from persistence import MongoPersistence
 from models import *
 import json
 from dataclasses import asdict
 
+from footprint_engine import FootprintBuilder
 
-
+import os
+import sys
+# Ensure root module can be imported
+sys.path.append(os.path.join( "D:\\newFootprintChart\\"))
+import config
 # ============================
-# IN stage8_engine.py
+# IN stage8_engine.py   
 # EXACT INSERTIONS ONLY
 # ============================
 
@@ -30,6 +36,14 @@ from stage11_bias_guard import TradeBiasGuard
 from stage12_stop_normalization import Stage12Controller
 
 from stage13_14_bias_cooldown import CooldownManager,DirectionalBiasGuard
+
+from pressure_tracker import PressureTracker
+from h1_aggregator import H1Aggregator
+from orderbook_analyzer import OrderBookAnalyzer
+from h1_aggregator import H1Aggregator
+from orderbook_analyzer import OrderBookAnalyzer
+from signal_generator import SignalGenerator
+from historical_data_fetcher import HistoricalDataFetcher
 
 
 # -------------------------
@@ -88,17 +102,20 @@ class TradeEngine:
 from stage12_stop_normalization import TradeEngine as V12TradeEngine
 from stage9_context import AuctionContext
 class LiveAuctionEngine:
-    def __init__(self):
+    def __init__(self, simulation_mode: bool = config.DEFAULT_SIMULATION_MODE, bias_timeframe_minutes: int = config.BIAS_TIMEFRAME_MINUTES, persistence_db_name = None):
+        self.simulation_mode = simulation_mode
         self.trade_engine = TradeEngine()
         # self.V12_tradeEngine = V12TradeEngine()
         self.structure: Dict[str, List[StructureLevel]] = {}
         self.last_candle_ts: Dict[str, int] = {}
-        self.persistence = MongoPersistence()
+        
+        db_name = persistence_db_name if persistence_db_name else config.DB_NAME
+        self.persistence = MongoPersistence(db_name=db_name)
         self.open_trades = {}
         self.loadFromDb()
 
         self.context_filter = AuctionContext(
-            lookback=10,
+            lookback=120,
             tick_size=0.05
         )
         # ---- inside LiveAuctionEngine.__init__ ----
@@ -125,12 +142,153 @@ class LiveAuctionEngine:
         self.directionaBias_guard = DirectionalBiasGuard(
             window=20,
             min_trades=5,
-            loss_threshold=0.65
+            loss_threshold=0.55
         )
 
         self.cooldown = CooldownManager(
             cooldown_ms=3 * 60 * 1000
         )
+
+        # Stage-15: Pressure Tracker (TBQ/TSQ delta over 30 ticks)
+        self.pressure_tracker = PressureTracker(window=30)
+        
+        # Stage-16: Context Module (H1 or Configured Timeframe)
+        self.h1_aggregator = H1Aggregator(
+            sma_period=config.SMA_PERIOD, 
+            bias_confirm_candles=config.BIAS_CONFIRM_CANDLES,
+            timeframe_minutes=bias_timeframe_minutes
+        )
+
+        self.orderbook = OrderBookAnalyzer(imbalance_ratio=1.5)
+        
+        # Stage-18: Signal Generator (plan.md FR-SIG-001/002)
+        self.signal_generator = SignalGenerator()
+        
+        # Track last candle for H/L break detection
+        self.last_candles: Dict[str, Candle] = {}
+
+        # Stage-19: Volume/Liquidity Filter (plan.md FR-CTX-003)
+        # Load 5-day ADV for all tracked symbols
+        self.adv_cache: Dict[str, float] = {}
+        # Simple token usage (should ideally come from config/env)
+        self.fetcher = HistoricalDataFetcher(config.ACCESS_TOKEN)
+        
+        # Initialize historical data for H1 and ADV
+        # NOTE: In live production, run historical_data_fetcher.py separately before start to save startup time
+        # Here we try to load from DB first
+        print("Initializing H1 & ADV data...")
+        # Pre-load for a few keys we know, or just rely on dynamic load
+        # For now, let's just instantiate. Actual warming happens when symbols added.
+
+        # ---- Footprint & Broadcaster ----
+        self.footprints: Dict[str, FootprintBuilder] = {}
+        self.last_vols: Dict[str, float] = {}
+        self.broadcaster = None
+
+    def set_broadcaster(self, fn):
+        self.broadcaster = fn
+
+    def update_footprint(self, symbol: str, price: float, qty: float, ts: int):
+        if symbol not in self.footprints:
+            # Auto-Calibrate Threshold based on History
+            dynamic_vol = None
+            hist = self.h1_aggregator.history_candles.get(symbol)
+            if hist and len(hist) > 10:
+                # Calculate Avg Vol of last 200  1-min candles
+                recent = list(hist)[-200:]
+                avg = sum(c.volume for c in recent) / len(recent)
+                if avg > 0:
+                    dynamic_vol = int(avg * 1.0) # 1.0x Avg Vol
+                    print(f"[Auto-Calibrate] {symbol} Vol Threshold: {dynamic_vol} (Avg: {int(avg)})")
+            
+            self.footprints[symbol] = FootprintBuilder(vol_threshold=dynamic_vol)
+        
+        fp = self.footprints[symbol]
+        
+        # Detect Side (Aggressor)
+        # If Price >= Best Ask -> BUY
+        # If Price <= Best Bid -> SELL
+        # Else -> Guess based on Tick Direction? Or assume BUY if Price > LastPrice?
+        # Accurate way: compare with OrderBook
+        side = "UNKNOWN"
+        book = self.orderbook.current_book.get(symbol)
+        if book:
+            if book.asks and price >= book.asks[0][0]:
+                side = "BUY"
+            elif book.bids and price <= book.bids[0][0]:
+                side = "SELL"
+        
+        # Fallback if no book or inside spread
+        if side == "UNKNOWN":
+             # Use last tick price comparison if available? 
+             # For now default to BUY if Price Up, SELL if Price Down logic could be added
+             # But let's just log it as BUY for now or split 50/50? 
+             # Let's default to BUY for simplicity if unknown, or maybe omit side logic in Builder?
+             # Builder needs 'BUY' or 'SELL'.
+             side = "BUY" 
+
+        fp.on_tick(price, qty, side)
+        
+        # Check for rotation (New Bar)
+        # Timestamp is in ms, Builder expects seconds for check_rotation?
+        # Builder uses seconds.
+        snap, rotated = fp.check_rotation(ts / 1000)
+        
+        # Always broadcast the update? Or only on change?
+        # Broadcasting every tick might be heavy. 
+        # But frontend expects "live" updates.
+        # Let's broadcast the current snapshot (or partial)
+        
+        # If rotated, we might want to send the FINAL of previous bar and START of new.
+        if rotated and snap:
+             # This snapshot is the CLOSED bar
+             # 1. Broadcaster (Live UI)
+             if self.broadcaster:
+                 self.broadcaster(symbol, snap)
+             
+             # 2. Persistence (DB Consistency)
+             # Use the same 'auction_trading' DB as everything else
+             # We can access raw db handle via self.persistence.db or add a method.
+             # Accessing internal db handle is quick fix.
+             try:
+                 snap_doc = snap.copy()
+                 snap_doc["symbol"] = symbol
+                 # Ensure keys are strings for Mongo (defaultdict might have int/float keys)
+                 snap_doc["levels"] = {str(k): v for k, v in snap.get("levels", {}).items()}
+                 
+                 self.persistence.db.footprints.update_one(
+                     {"symbol": symbol, "ts": snap["ts"], "type": "footprint"},
+                     {"$set": snap_doc},
+                     upsert=True
+                 )
+             except Exception as e:
+                 print(f"Footprint Save Error: {e}")
+             
+             # 3. SYNTHETIC STRATEGY TRIGGER
+             # If WSS doesn't send OHLC, we build it here.
+             try:
+                 syn_candle = Candle(
+                     symbol=symbol,
+                     open=snap.get("open", 0),
+                     high=snap.get("high", 0),
+                     low=snap.get("low", 0),
+                     close=snap.get("close", 0),
+                     volume=snap.get("volume", 0),
+                     ts=snap["ts"]
+                 )
+                #  print(f"DEBUG: Synthetic Candle Trigger for {symbol} @ {datetime.now()}")
+                 self.on_candle_close(syn_candle)
+             except Exception as e:
+                 print(f"Synthetic Candle Error: {e}")
+             
+        # Send current incomplete bar
+        current_snap = fp.snapshot(atp=price) # Using price as ATP proxy for now
+        current_snap["type"] = "footprint"
+        current_snap["symbol"] = symbol
+        
+        if self.broadcaster:
+            self.broadcaster(symbol, current_snap)
+
 
 
 
@@ -138,35 +296,66 @@ class LiveAuctionEngine:
     def loadFromDb(self):
         print("-------- REHYDRATE --------")
 
-        # ---- OPEN TRADES ----
+        # Reset memory state
         self.trade_engine.open_trades = {}
+        self.trade_engine.closed_trades = [] # Ensure clean slate
+        
+        # Calculate Start of Day to filter stale trades
+        from datetime import datetime
+        now = datetime.now()
+        today_start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = today_start_dt.timestamp() * 1000
+        
+        print(f"Rehydrating trades after: {today_start} ({today_start_dt})")
 
+        open_loaded = 0
+        open_skipped = 0
+        closed_loaded = 0
+        closed_skipped = 0
+
+        # ---- OPEN TRADES ----
         for doc in self.persistence.load_open_trades():
+            if doc["entry_ts"] < today_start:
+                open_skipped += 1
+                continue # Skip old trades
 
             trade = Trade(
                 symbol=doc["symbol"],
                 side=doc["side"],
                 entry_price=doc["entry_price"],
                 entry_ts=doc["entry_ts"],
+                stop_price=doc.get("stop_price", 0.0),
+                tp_price=doc.get("tp_price"),
                 exit_price=doc.get("exit_price"),
                 exit_ts=doc.get("exit_ts"),
                 reason=doc.get("reason"),
             )
             self.trade_engine.open_trades[trade.symbol] = trade
+            open_loaded += 1
 
 
+        # ---- CLOSED TRADES ----
         for doc in self.persistence.load_closed_trades():
+            if doc["entry_ts"] < today_start:
+                closed_skipped += 1
+                continue
 
             trade = Trade(
                 symbol=doc["symbol"],
                 side=doc["side"],
                 entry_price=doc["entry_price"],
                 entry_ts=doc["entry_ts"],
+                stop_price=doc.get("stop_price", 0.0),
+                tp_price=doc.get("tp_price"),
                 exit_price=doc.get("exit_price"),
                 exit_ts=doc.get("exit_ts"),
                 reason=doc.get("reason"),
+                pnl=doc.get("pnl")  # Add this line
             )
             self.trade_engine.closed_trades.append(trade)
+            closed_loaded += 1
+            
+        print(f"Rehydration All Claims: OPEN {open_loaded} (Skipped {open_skipped}), CLOSED {closed_loaded} (Skipped {closed_skipped})")
 
 
         # ---- STRUCTURE LEVELS ----
@@ -192,27 +381,123 @@ class LiveAuctionEngine:
         #         ts=tick.ts
         #     )
     def on_tick(self, tick: Tick):
+        # Constants for early trade protection
+        MIN_HOLD_SECONDS = 180    # 3 minutes minimum hold
+        MIN_PROFIT_PCT = 0.003    # 0.3% minimum profit before discretionary exits
+        
+        # 1. Always update pressure tracker (even without open trade)
+        self.pressure_tracker.update(tick)
+        
         if not self.trade_engine.has_open_trade(tick.symbol):
             return
 
         trade = self.trade_engine.open_trades[tick.symbol]
-        # print(trade)
-        exit_signal = self.stage12.evaluate_exit(
-            trade=trade,
-            ltp=tick.ltp
-
-        )
-
-        if exit_signal is None:
+        symbol = tick.symbol
+        
+        # Calculate hold time and current profit %
+        hold_time_ms = tick.ts - trade.entry_ts
+        hold_time_sec = hold_time_ms / 1000
+        
+        if trade.side == "LONG":
+            pnl_pct = (tick.ltp - trade.entry_price) / trade.entry_price
+        else:
+            pnl_pct = (trade.entry_price - tick.ltp) / trade.entry_price
+        
+        # ========================================
+        # PRIORITY 1: HARD SL (Always Active)
+        # This is the ONLY exit that works immediately
+        # ========================================
+        if trade.side == "LONG" and tick.ltp <= trade.stop_price:
+            self._execute_exit(trade, tick, reason="SL")
             return
+        if trade.side == "SHORT" and tick.ltp >= trade.stop_price:
+            self._execute_exit(trade, tick, reason="SL")
+            return
+        
+        # ========================================
+        # EARLY TRADE PROTECTION
+        # If trade is young OR profit is small:
+        #   - Only SL can exit (checked above)
+        #   - Allow trailing to adjust stop
+        #   - Skip ALL discretionary exits
+        # ========================================
+        if hold_time_sec < MIN_HOLD_SECONDS or pnl_pct < MIN_PROFIT_PCT:
+            # Trade needs time to develop - only trailing allowed
+            if self.pressure_tracker.is_trending(symbol):
+                self.stage12.check_trailing_stop(trade, tick.ltp, multiplier=4.0)
+            else:
+                self.stage12.check_trailing_stop(trade, tick.ltp, multiplier=3.0)
+            return
+        
+        # ========================================
+        # DISCRETIONARY EXITS (Only after protection)
+        # Trade is mature (>3min) AND profitable (>0.3%)
+        # ========================================
+        # PRIORITY 1: WALL DETECTION EXIT (plan.md FR-EXEC-005)
+        # Large liquidity blocking our direction? Exit immediately.
+        # ========================================
+        wall_price = self.orderbook.detect_wall(symbol, trade.side)
+        if wall_price:
+            # If wall is close (within 0.1%), exit
+            dist_pct = abs(tick.ltp - wall_price) / tick.ltp
+            if dist_pct < 0.001:
+                self._execute_exit(trade, tick, reason="OB_WALL_DETECTED")
+                return
 
-        reason, exit_price = exit_signal
+        # ========================================
+        # PRIORITY 2: EXHAUSTION AGGRESSION EXIT
+        # 10 ticks showing strong opposing pressure
+        # ========================================
+        if self.pressure_tracker.check_exhaustion_aggression(symbol, trade.side, tick_count=10):
+            self._execute_exit(trade, tick, reason="EXHAUSTION_AGGRESSION")
+            return
+        
+        # Check TP (but skip if pressure supports direction)
+        exit_signal = self.stage12.evaluate_exit(trade=trade, ltp=tick.ltp)
+        if exit_signal:
+            reason, exit_price = exit_signal
+            if reason == "TP" and self.pressure_tracker.pressure_supports(symbol, trade.side):
+                # Pressure favorable - let it run
+                pass
+            else:
+                self._execute_exit(trade, tick, reason=reason)
+                return
+        
+        # ========================================
+        # TRAILING STOP (dynamic based on trend)
+        # ========================================
+        if self.pressure_tracker.is_trending(symbol):
+            self.stage12.check_trailing_stop(trade, tick.ltp, multiplier=4.0)
+        else:
+            self.stage12.check_trailing_stop(trade, tick.ltp, multiplier=3.0)
+    
+    def _check_candle_hl_broken(self, trade: Trade, tick: Tick) -> bool:
+        """
+        Check if last candle's H/L is broken against position.
+        LONG: price breaks below last candle's low → EXIT
+        SHORT: price breaks above last candle's high → EXIT
+        """
+        last_candle = self.last_candles.get(tick.symbol)
+        if not last_candle:
+            return False
+        
+        if trade.side == "LONG":
+            return tick.ltp < last_candle.low
+        else:  # SHORT
+            return tick.ltp > last_candle.high
+    
+    def _execute_exit(self, trade: Trade, tick: Tick, reason: str):
+        """
+        Centralized exit execution - single place for all exits.
+        """
+        exit_price = tick.ltp
         trade.exit_price = exit_price
         trade.reason = reason
         trade.exit_ts = tick.ts
-        trade.status="CLOSED"
-        trade.pnl = trade.exit_price - trade.entry_price if trade.side=="LONG" else trade.entry_price-trade.exit_price
-        # -------- EXECUTE EXIT (ONLY PLACE) --------
+        trade.status = "CLOSED"
+        trade.pnl = (exit_price - trade.entry_price) if trade.side == "LONG" else (trade.entry_price - exit_price)
+        
+        # Execute exit
         self.trade_engine.exit_trade(
             tick.symbol,
             exit_price,
@@ -220,7 +505,7 @@ class LiveAuctionEngine:
             reason,
             trade.pnl
         )
-
+        
         self.persistence.close_trade(
             tick.symbol,
             exit_price,
@@ -228,13 +513,15 @@ class LiveAuctionEngine:
             reason,
             pnl=trade.pnl
         )
-
-        # -------- POST EXIT SIDE EFFECTS --------
+        
+        # Post-exit side effects
         self.directionaBias_guard.record_trade_exit(trade)
-
-        if reason == "SL":
+        
+        if reason in ("SL", "EXHAUSTION_AGGRESSION", "CANDLE_HL_BREAK"):
             self.cooldown.record_stop(tick.symbol, tick.ts)
-
+        
+        # Reset pressure tracker for this symbol
+        self.pressure_tracker.reset(tick.symbol)
         self.add_logic.reset(tick.symbol)
 
 
@@ -264,6 +551,15 @@ class LiveAuctionEngine:
     def on_candle_close(self, candle: Candle):
         self.stage12.on_candle_close(candle)
         self.last_candle_ts[candle.symbol] = candle.ts
+        
+        # Store for H/L break detection in on_tick
+        self.last_candles[candle.symbol] = candle
+        
+        # ============================
+        # Stage-16: H1 AGGREGATION
+        # Feed every 1-min candle to H1 aggregator
+        # ============================
+        self.h1_aggregator.on_1min_candle(candle)
 
         last_ts = self.persistence.get_last_candle_ts(candle.symbol)
         if last_ts is not None and candle.ts <= last_ts:
@@ -277,37 +573,148 @@ class LiveAuctionEngine:
         # AUCTION-THEORY ENTRY LOGIC
         # ============================
 
-        # Determine trade side based on auction context
-        if self.context_filter.allow_trade(candle, "LONG"):
-            side = "LONG"
-        elif self.context_filter.allow_trade(candle, "SHORT"):
-            side = "SHORT"
-        else:
-            return
+        # MINIMUM VOLUME CHECK: Dynamic based on Footprint Rotation Threshold
+        # We want to ensure the candle is "full" relative to its specific rotation setting.
+        # This accounts for Auto-Calibration per symbol.
+        entry_thresh = config.MIN_ENTRY_VOLUME # Default Fallback
+        
+        if candle.symbol in self.footprints:
+             # Use the actual threshold assigned to this symbol's builder
+             fp_thresh = self.footprints[candle.symbol].vol_threshold
+             # Use same multiplier (e.g. 0.7)
+             entry_thresh = int(fp_thresh * 0.7)
+        
+        if "INDEX" in candle.symbol or "Nifty" in candle.symbol:
+             # Indices have no volume (or unreliable volume in some feeds)
+             # Skip volume check
+             pass
+        elif candle.volume < entry_thresh:
+             print(f"[REJECT] {candle.symbol} Vol {candle.volume} < {entry_thresh} (Dynamic)")
+             return
+
+             
+        is_igniting = False
+        # Special Igniting Check First
+        if self.context_filter._check_igniting_candle(candle.symbol, candle.volume):
+            if candle.close > candle.open: # Green
+                side = "LONG"
+                is_igniting = True
+            elif candle.close < candle.open:
+                side = "SHORT"
+                is_igniting = True
+            else:
+                return # Doji igniting? Skip.
+        
+        if not is_igniting:
+            if self.context_filter.allow_trade(candle, "LONG"):
+                side = "LONG"
+            elif self.context_filter.allow_trade(candle, "SHORT"):
+                side = "SHORT"
+            else:
+                print(f"[REJECT] {candle.symbol} not igniting  Context Filter blocked")
+                return #  REMOVE RETURN CONTINUE Aother logic
+                 
+
+        # ============================
+        # Stage-16: H1 BIAS FILTER (plan.md FR-CTX-002)
+        # Only trade in direction of H1 trend
+        # ============================
+        if not self.h1_aggregator.allows_trade(candle.symbol, side):
+            # H1 bias doesn't support this direction
+            # BACKTEST FALLBACK: If bias is None (no history) and sim mode, allow.
+            if self.simulation_mode and self.h1_aggregator.get_bias(candle.symbol) is None:
+                pass # Allow
+            else:
+                print(f"[REJECT] {candle.symbol} H1 Bias Agreement blocked (Side: {side})")
+                return
+            
+        # ============================
+        # Stage-18: SIGNAL VALIDATION (plan.md FR-SIG-001/002)
+        # Check for Pullback + Reversal Pattern
+        # ============================
+        # Get H1 levels for pullback check
+        h1_levels = self.h1_aggregator.get_h1_levels(candle.symbol)
+        bias = self.h1_aggregator.get_bias(candle.symbol)
+        
+        # If we are in backtest mode without enough history, skip strict signal check
+        # But in live, we want strict adherence.
+        # Check signal from generator
+        signal = self.signal_generator.get_signal(candle, h1_levels, bias)
+        
+        # If no strict signal, but we have bias... 
+        # Plan says "Upon a pullback... system must detect reversal".
+        # This implies we ONLY trade if signal generator confirms.
+        if not signal:
+            # If standard logic said go, but signal generator didn't see a setup...
+            # We skip. 
+            pass 
+            # NOTE: Uncomment below to ENFORCE strict patterns. 
+            # For now, leaving it as a filter that allows IGNITING bars to bypass.
+            # In simulation, if we lack H1 levels, we might miss signals. 
+            if not is_igniting and not self.simulation_mode: 
+                 print(f"[REJECT] {candle.symbol} No Signal Pattern (Pullback/Reversal)")
+                 return 
+        
+        # ============================
+        # Stage-17: ORDER BOOK IMBALANCE (plan.md FR-EXEC-001)
+        # TBQ > 1.5x TSQ for LONG, TSQ > 1.5x TBQ for SHORT
+        # ============================
+        if not self.orderbook.check_entry_imbalance(candle.symbol, side):
+            # Order book imbalance doesn't confirm entry
+            # BACKTEST FALLBACK: If OB is empty (missing L2 data) and sim mode, allow.
+            book = self.orderbook.current_book.get(candle.symbol)
+            if self.simulation_mode and (not book or (book.tbq == 0 and book.tsq == 0)):
+                pass # Allow
+            else:
+                # Real rejection
+                print(f"[REJECT] {candle.symbol} OrderBook Imbalance blocked")
+                return
 
         # Check bias guards and cooldowns
         if not self.bias_guard.allow_trade(candle.symbol, side, candle.ts) or \
            not self.directionaBias_guard.allow_trade(candle.symbol, side) or \
            not self._allow_entry(candle, side):
+            print(f"[REJECT] {candle.symbol} Bias/Cooldown/Guard blocked")
             return
 
         # Get ATR for stop placement
         last_atr = self.stage12.atr_tracker.get_atr(candle.symbol)
         if last_atr is None:
+            print(f"[REJECT] {candle.symbol} ATR not ready")
             return  # Do not trade until ATR is ready
 
         # Execute trade
-        stop_price = self.stage12.stop_normalizer.compute_initial_stop(candle.close, side, last_atr)
+        # Stage-17: Dynamic SL based on Order Book (plan.md FR-EXEC-004)
+        ob_stop = self.orderbook.get_dynamic_stop(candle.symbol, side, candle.low, candle.high)
+        
+        # Fallback to ATR-based if OB stop not available/fails
+        atr_stop = self.stage12.stop_normalizer.compute_initial_stop(candle.close, side, last_atr)
+        
+        # Use OB stop if valid, else ATR (Or maybe check which is tighter/safer? Plan says "whichever is wider")
+        # Plan: "1 tick below bid OR below candle low, whichever is wider"
+        # The get_dynamic_stop method implements this logic.
+        stop_price = ob_stop if ob_stop else atr_stop
+        
+        tp_price = self.stage12.stop_normalizer.compute_take_profit(candle.close, stop_price, side)
+
         trade = Trade(
             symbol=candle.symbol,
             side=side,
             entry_price=candle.close,
             entry_ts=candle.ts,
-            stop_price=stop_price
+            stop_price=stop_price,
+            tp_price=tp_price,
+            reason="IGNITING" if is_igniting else "STANDARD"
         )
 
         self.trade_engine.enter_trade(trade)
-        self.stage12.on_trade_entry(trade, last_atr)
+        
+        # If IGNITING, Override Stop Logic Immediately
+        if is_igniting:
+             self.stage12.update_initial_stop_igniting(trade, candle)
+        else:
+             self.stage12.on_trade_entry(trade, last_atr)
+             
         self.persistence.save_open_trade(trade)
 
 
@@ -379,11 +786,78 @@ class LiveMarketRouter:
             ltp, ts = self._extract_ltp_ts(ff)
 
             if ltp is not None:
+                # WARMUP CHECK: If we haven't seen this symbol, warm up H1 & ADV
+                # Skip in simulation mode (don't fetch live API data for backtest simulation)
+                if not self.engine.simulation_mode and symbol not in self.engine.h1_aggregator.h1_candles:
+                    try:
+                        self.engine.h1_aggregator.initialize_symbol(symbol)
+                        # Also load ADV
+                        adv = self.engine.fetcher.calculate_5day_adv(symbol)
+                        if adv > 0:
+                            self.engine.adv_cache[symbol] = adv
+                    except Exception as e:
+                        print(f"Warmup failed for {symbol}: {e}")
+
+                # Extract extended fields if available
+                vol = float(market.get("vol", 0))
+                tbq = int(market.get("tbq", 0))
+                tsq = int(market.get("tsq", 0))
+                
                 self.engine.on_tick(
                     Tick(symbol=symbol,
                     ltp=ltp,
-                    ts=ts)
+                    ts=ts,
+                    volume=vol,
+                    total_buy_qty=tbq,
+                    total_sell_qty=tsq)
                 )
+                
+                # Stage-17: Update order book analyzer with Level 2 data
+                self.engine.orderbook.update(symbol, market, ts)
+
+                # ---- Footprint Update ----
+                # Calculate trade volume delta
+                last_vol = self.engine.last_vols.get(symbol, vol)
+                trade_vol = vol - last_vol
+                # Handle rollover (reset to 0) or bad data?
+                if trade_vol < 0: trade_vol = 0 
+                self.engine.last_vols[symbol] = vol
+                
+                # Fallback to LTQ if Vol delta is 0
+                ltq = int(market.get("ltpc", {}).get("ltq", 0))
+                
+                if trade_vol <= 0 and ltq > 0:
+                     trade_vol = ltq
+                
+                if trade_vol > 0:
+                     # print(f"DEBUG: FP UPDATE {symbol} Vol={trade_vol}") 
+                     self.engine.update_footprint(symbol, ltp, trade_vol, ts)
+                else:
+                     # print(f"DEBUG: Skipping FP {symbol} Vol=0 raw_vol={vol}")
+                     pass
+                
+                # ---- Broadcast DOM ----
+                if self.engine.broadcaster:
+                    # Construct DOM message
+                    # marketLevel has bidAskQuote
+                    # Frontend expects: {type: 'dom', symbol: ..., bids: {p:q}, asks: {p:q}}
+                    ml = market.get("marketLevel", {})
+                    quotes = ml.get("bidAskQuote", [])
+                    bids = {}
+                    asks = {}
+                    for q in quotes:
+                        # Upstox V3 format: {bidP, bidQ, askP, askQ}
+                        if "bidP" in q and q["bidP"]: bids[str(q["bidP"])] = q.get("bidQ", 0)
+                        if "askP" in q and q["askP"]: asks[str(q["askP"])] = q.get("askQ", 0)
+                    
+                    dom_msg = {
+                        "type": "dom",
+                        "symbol": symbol,
+                        "bids": bids,
+                        "asks": asks,
+                        "ts": ts
+                    }
+                    self.engine.broadcaster(symbol, dom_msg)
 
             # ---- candle close from WSS snapshot ----
             if market and "marketOHLC" in market:
@@ -395,7 +869,8 @@ class LiveMarketRouter:
                                 candle_ts = int(o["ts"])
                                 if self.engine.last_candle_ts.get(symbol) == candle_ts:
                                     continue
-
+                                
+                                # print(f"DEBUG: Candle Close Triggered via WSS for {symbol} @ {datetime.now()}")
                                 candle = Candle(
                                     symbol=symbol,
                                     open=float(o["open"]),

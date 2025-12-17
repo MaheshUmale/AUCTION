@@ -23,7 +23,10 @@ class Tick:
     symbol: str
     ltp: float
     ts: int  # ltt (ms)
-    side=str
+    volume: int = 0
+    total_buy_qty: int = 0
+    total_sell_qty: int = 0
+    side: str = ""
 
 
 from dataclasses import dataclass
@@ -56,6 +59,7 @@ class Trade:
     entry_price: float
     entry_ts: int
     stop_price: float        #Optional[float] = None
+    tp_price: Optional[float] = None
     exit_price: float | None = None
     exit_ts: int | None = None
     reason: str | None = None
