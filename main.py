@@ -13,79 +13,48 @@ import pytz
 import os
 import sys
 
-# Ensure root module can be imported
-sys.path.append(os.path.join( "D:\\newFootprintChart\\"))
 
 import config
 
-# Connect to MongoDB
-client = MongoClient("mongodb://localhost:27017")
-db = client["upstox_strategy_db"]
-tick_collection = db["tick_data"]
+from persistence import QuestDBPersistence
 
-# Clean DB for fresh backtest
-client.drop_database("auction_trading_backtest")
-print("Dropped 'auction_trading_backtest' database for clean backtest.")
+# Connect to QuestDB
+persistence = QuestDBPersistence(db_name="auction_trading_backtest")
+
+# The following lines are removed as they are MongoDB-specific
+# client = MongoClient("mongodb://localhost:27017")
+# db = client["upstox_strategy_db"]
+# tick_collection = db["tick_data"]
+# client.drop_database("auction_trading_backtest")
+# print("Dropped 'auction_trading_backtest' database for clean backtest.")
 
 def get_symbols_from_today():
     """Returns a list of symbols for today's trading session."""
     return config.WATCHLIST
 
 def get_trades_from_today(symbol: str):
-    """Fetches closed trades for a given symbol from MongoDB."""
-    client = MongoClient('mongodb://localhost:27017/')
-    result = client['auction_trading_backtest']['closed_trades'].find({"symbol": symbol}, {"_id": 0})
-    # Trade objects will have entry_ts/exit_ts as long integers (milliseconds)
-    return [Trade(**doc) for doc in result]
+    """Fetches closed trades for a given symbol from QuestDB."""
+    trades = persistence.load_closed_trades()
+    return [Trade(**trade) for trade in trades if trade['symbol'] == symbol]
 
-def simulate_live_ticks_to_router( 
+def simulate_live_ticks_to_router(
     instrument_key: str,
     router: LiveMarketRouter
-)  :
-    
-    print("simulate PROCESSING --- instrument_key "+instrument_key)
-    startDate="2025-12-17"
-    endDate="2025-12-18"
-    # The format code '%Y-%m-%d' matches the 'yyyy-mm-dd' string format
-    datetime_start = datetime.strptime(startDate, '%Y-%m-%d')
-    # To add the UTC timezone information, use .replace()
-    startDate_utc = datetime_start.replace(tzinfo=timezone.utc)
-
-    # The format code '%Y-%m-%d' matches the 'yyyy-mm-dd' string format
-    datetime_end = datetime.strptime(endDate, '%Y-%m-%d')
-    # To add the UTC timezone information, use .replace()
-    endDate_utc = datetime_end.replace(tzinfo=timezone.utc)
-
-
-    
-    # 1. Convert strings to Python datetime objects for precise time handling
-    # Assuming _insertion_time in MongoDB is stored as UTC datetime objects
-    start_of_day = datetime.strptime(startDate + "T00:00:00.000", "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
-    # The MongoDB query should check up to the start of the next day (exclusive)
-    end_of_day_exclusive = datetime.strptime(endDate, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
-
-    # 2. Pass the native datetime objects to the PyMongo query
-    cursor = tick_collection.find(
-        {
-            "instrumentKey": instrument_key,
-            "_insertion_time": {
-                "$gte": start_of_day, # Pass the datetime object directly
-                "$lt": end_of_day_exclusive      # Pass the datetime object directly
-            }
-        },
-        {
-
-            "_id": 0
-        }
-    ).sort("_insertion_time", 1) 
-    list_cursor = list(cursor)
-     
-
-    for doc in list_cursor:      
-        inst ={f'{instrument_key}': doc}
-        feed ={"feeds":inst}  
-        router.on_message(feed)
+):
+    print("simulate PROCESSING --- instrument_key " + instrument_key)
+    # Get a list of .gz files in the data directory
+    gz_files = [f for f in os.listdir('data') if f.endswith('.gz')]
+    for file in gz_files:
+        with gzip.open(os.path.join('data', file), 'rt') as f:
+            for line in f:
+                try:
+                    # Parse the JSON from the line
+                    record = json.loads(line.strip())
+                    # The rest of your processing logic
+                    if record.get("feeds") and record["feeds"].get(instrument_key):
+                        router.on_message(record)
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}")
 
 
 ACCESS_TOKEN = config.ACCESS_TOKEN

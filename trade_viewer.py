@@ -3,51 +3,11 @@
 # FILE: trade_viewer.py
 # =========================
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request, redirect, url_for
 import threading
 import pandas as pd
 import json
-def start(engine):
-    app = Flask(__name__)
 
-    @app.route("/status")
-    def status():
-        return jsonify({
-            "open_trades": engine.trade_engine.get_open_trade_count(),
-            "closed_trades": len(engine.trade_engine.closed_trades),
-        })
-    @app.route("/details")
-    def details():
-        return jsonify({
-            "open_trades": engine.trade_engine.open_trades,
-            "closed_trades": engine.trade_engine.closed_trades,
-        })
-
-    @app.route("/")
-    def index():
-        json_data = ({
-            "open_trades": engine.trade_engine.open_trades,
-            "closed_trades": engine.trade_engine.closed_trades,
-        })
-        # --- 3. Execute the function and get the output ---
-        html_output_string = generate_trade_html_tables(json_data)
-
-        return html_output_string 
-
-
-    def run():
-        app.run(host="127.0.0.1", port=8000, debug=False, use_reloader=False)
-
-    threading.Thread(target=run, daemon=True).start()
-
-# Function to apply header style
-def highlight_header(s):
-    # This applies a custom CSS style to the header row (th elements)
-    # You can customize the background-color, color, font-weight, etc.
-    return 'background-color: #007bff; color: white; font-weight: bold; text-align: center;'
-
-
-# --- 2. Function to process data and return a combined HTML string ---
 def generate_trade_html_tables(data):
     # Process closed_trades (list of dictionaries)
     if data["closed_trades"]:
@@ -56,9 +16,9 @@ def generate_trade_html_tables(data):
         df_closed['entry_ts'] = pd.to_datetime(df_closed['entry_ts'], unit='ms')
         df_closed['exit_ts'] = pd.to_datetime(df_closed['exit_ts'], unit='ms')
         # Generate HTML with Bootstrap classes for styling
-        
+
         html_closed = df_closed.to_html(index=False, classes="table table-striped table-hover", border=0)
-        
+
         # Add Bootstrap header class (e.g., 'thead-dark' or 'thead-light') using string replace
         # Use .replace() with count=1 to only replace the first occurrence (the main thead)
         html_closed = html_closed.replace("<thead>", "<thead class='thead-dark'>", 1)
@@ -103,8 +63,84 @@ def generate_trade_html_tables(data):
             {html_closed}
             <h2>Open Trades</h2>
             {html_open}
+
+            <hr>
+            <h2>Renko Configuration</h2>
+            <form action="/renko" method="post">
+                <div class="form-group">
+                    <label for="brick_mode">Brick Size Mode</label>
+                    <select class="form-control" id="brick_mode" name="brick_mode">
+                        <option value="fixed">Fixed</option>
+                        <option value="percentage">Percentage</option>
+                        <option value="atr">ATR</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="brick_value">Brick Size Value</label>
+                    <input type="text" class="form-control" id="brick_value" name="brick_value" value="2.0">
+                </div>
+                <button type="submit" class="btn btn-primary mt-2">Update Renko</button>
+            </form>
         </div>
     </body>
     </html>
     """
     return full_html
+
+def start(engine):
+    app = Flask(__name__)
+
+    @app.route("/status")
+    def status():
+        return jsonify({
+            "open_trades": engine.trade_engine.get_open_trade_count(),
+            "closed_trades": len(engine.trade_engine.closed_trades),
+        })
+    @app.route("/details")
+    def details():
+        return jsonify({
+            "open_trades": engine.trade_engine.open_trades,
+            "closed_trades": engine.trade_engine.closed_trades,
+        })
+
+    @app.route("/")
+    def index():
+        print("Index route hit")
+        json_data = ({
+            "open_trades": engine.trade_engine.open_trades,
+            "closed_trades": engine.trade_engine.closed_trades,
+        })
+        # --- 3. Execute the function and get the output ---
+        html_output_string = generate_trade_html_tables(json_data)
+
+        return html_output_string
+
+    @app.route("/renko", methods=["POST"])
+    def update_renko():
+        mode = request.form.get("brick_mode")
+        value = float(request.form.get("brick_value"))
+
+        engine.renko_aggregator.brick_size_mode = mode
+        engine.renko_aggregator.brick_size_value = value
+
+        return redirect(url_for("index"))
+
+    def run():
+        app.run(host="127.0.0.1", port=8000, debug=False, use_reloader=False)
+
+    threading.Thread(target=run, daemon=True).start()
+
+if __name__ == '__main__':
+    class MockEngine:
+        class MockTradeEngine:
+            def get_open_trade_count(self):
+                return 0
+            def get_open_trades_list(self):
+                return {}
+            open_trades = {}
+            closed_trades = []
+        trade_engine = MockTradeEngine()
+    start(MockEngine())
+    import time
+    while True:
+        time.sleep(1)
