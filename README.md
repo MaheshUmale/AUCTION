@@ -88,3 +88,16 @@ python3 main_live.py
 ```
 
 The bot will then connect to the Upstox WebSocket feed, and the monitor will print a summary of open and closed trades to the console every 5 seconds.
+
+## Dataflow and Replay
+
+The trading bot is designed to store all incoming WebSocket feed data in a structured format, which allows for efficient querying and high-fidelity backtesting. All feed data, including ticks, candles, and order book updates, is stored in the `tick_data` table in QuestDB.
+
+### Data Storage
+
+-   **Table:** `tick_data`
+-   **Schema:** The table stores various fields from the WebSocket feed, including LTP, LTQ, open, high, low, close, and order book data. A `feed_type` column distinguishes between different types of data (e.g., `TICK`, `CANDLE_I1`).
+
+### Data Replay
+
+The structured data in the `tick_data` table can be queried to reconstruct the market state at any given time. This allows for accurate backtesting and analysis by replaying historical data through the trading engine.

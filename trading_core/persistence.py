@@ -27,9 +27,43 @@ class QuestDBPersistence:
             database=self.db_name,
         )
 
+    def _create_tick_data_table(self, cur):
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS 'tick_data' (
+            timestamp TIMESTAMP,
+            instrument_key SYMBOL CAPACITY 512 CACHE,
+            feed_type SYMBOL CAPACITY 256 CACHE,
+            ltp DOUBLE,
+            ltq LONG,
+            cp DOUBLE,
+            oi LONG,
+            atp DOUBLE,
+            vtt LONG,
+            tbq DOUBLE,
+            tsq DOUBLE,
+            delta DOUBLE,
+            theta DOUBLE,
+            gamma DOUBLE,
+            vega DOUBLE,
+            rho DOUBLE,
+            iv DOUBLE,
+            bid_price_1 DOUBLE,
+            bid_qty_1 LONG,
+            ask_price_1 DOUBLE,
+            ask_qty_1 LONG,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            insertion_time TIMESTAMP
+        ) timestamp(timestamp) PARTITION BY DAY WAL
+        WITH maxUncommittedRows=500000, o3MaxLag=600000000us;
+        """)
+
     def _create_tables(self):
         with self._get_conn() as conn:
             with conn.cursor() as cur:
+                self._create_tick_data_table(cur)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS levels (
                     symbol SYMBOL,
@@ -286,3 +320,39 @@ class QuestDBPersistence:
                 cur.execute(query, (symbol, from_date, to_date))
                 rows = cur.fetchall()
                 return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
+
+    def save_tick_data(self, data: Dict):
+        with Sender.from_conf(self.conf) as sender:
+            sender.row(
+                'tick_data',
+                symbols={
+                    'instrument_key': data['instrument_key'],
+                    'feed_type': data['feed_type'],
+                },
+                columns={
+                    'ltp': data.get('ltp'),
+                    'ltq': data.get('ltq'),
+                    'cp': data.get('cp'),
+                    'oi': data.get('oi'),
+                    'atp': data.get('atp'),
+                    'vtt': data.get('vtt'),
+                    'tbq': data.get('tbq'),
+                    'tsq': data.get('tsq'),
+                    'delta': data.get('delta'),
+                    'theta': data.get('theta'),
+                    'gamma': data.get('gamma'),
+                    'vega': data.get('vega'),
+                    'rho': data.get('rho'),
+                    'iv': data.get('iv'),
+                    'bid_price_1': data.get('bid_price_1'),
+                    'bid_qty_1': data.get('bid_qty_1'),
+                    'ask_price_1': data.get('ask_price_1'),
+                    'ask_qty_1': data.get('ask_qty_1'),
+                    'open': data.get('open'),
+                    'high': data.get('high'),
+                    'low': data.get('low'),
+                    'close': data.get('close'),
+                    'insertion_time': data.get('insertion_time')
+                },
+                at=data['timestamp']
+            )
