@@ -7,42 +7,40 @@ from typing import Dict, List, Optional
 import time
 import threading
 from datetime import datetime
-from persistence import QuestDBPersistence
-from models import *
+from trading_core.persistence import QuestDBPersistence
+from trading_core.models import *
 import json
 from dataclasses import asdict
 
-from footprint_engine import FootprintBuilder
+from strategy.footprint_engine import FootprintBuilder
 
 import os
 import sys
 import config
 # ============================
-# IN stage8_engine.py   
+# IN stage8_engine.py
 # EXACT INSERTIONS ONLY
 # ============================
 
-from stage10_add_logic import Stage10AddLogic
+from strategy.stage10_add_logic import Stage10AddLogic
 
 # ============================
 # IN stage8_engine.py
 # EXACT INSERTIONS ONLY
 # ============================
 
-from stage11_bias_guard import TradeBiasGuard
+from strategy.stage11_bias_guard import TradeBiasGuard
 
-from stage12_stop_normalization import Stage12Controller
+from strategy.stage12_stop_normalization import Stage12Controller
 
-from stage13_14_bias_cooldown import CooldownManager,DirectionalBiasGuard
+from strategy.stage13_14_bias_cooldown import CooldownManager,DirectionalBiasGuard
 
-from pressure_tracker import PressureTracker
-from h1_aggregator import H1Aggregator
-from orderbook_analyzer import OrderBookAnalyzer
-from h1_aggregator import H1Aggregator
-from orderbook_analyzer import OrderBookAnalyzer
-from signal_generator import SignalGenerator
-from historical_data_fetcher import HistoricalDataFetcher
-from renko_aggregator import RenkoAggregator
+from strategy.pressure_tracker import PressureTracker
+from data_handling.h1_aggregator import H1Aggregator
+from strategy.orderbook_analyzer import OrderBookAnalyzer
+from strategy.signal_generator import SignalGenerator
+from data_handling.historical_data_fetcher import HistoricalDataFetcher
+from strategy.renko_aggregator import RenkoAggregator
 
 
 # -------------------------
@@ -98,9 +96,14 @@ class TradeEngine:
 # -------------------------
 # Auction / Strategy Engine
 # -------------------------
-from stage12_stop_normalization import TradeEngine as V12TradeEngine
-from stage9_context import AuctionContext
+from strategy.stage12_stop_normalization import TradeEngine as V12TradeEngine
+from strategy.stage9_context import AuctionContext
+
 class LiveAuctionEngine:
+    """
+    The LiveAuctionEngine is the core of the trading bot. It integrates market
+    data, trading logic, and persistence to make real-time trading decisions.
+    """
     def __init__(self, simulation_mode: bool = config.DEFAULT_SIMULATION_MODE, bias_timeframe_minutes: int = config.BIAS_TIMEFRAME_MINUTES, persistence_db_name = None):
         self.simulation_mode = simulation_mode
         self.trade_engine = TradeEngine()
@@ -113,77 +116,70 @@ class LiveAuctionEngine:
         self.open_trades = {}
         self.loadFromDb()
 
+        # The AuctionContext provides the primary market structure analysis.
         self.context_filter = AuctionContext(
             lookback=120,
             tick_size=0.05
         )
-        # ---- inside LiveAuctionEngine.__init__ ----
+
+        # The Stage10AddLogic determines when to add to an existing position.
         self.add_logic = Stage10AddLogic(
             max_adds=2,
             add_threshold_pct=0.003
         )
-        # ---- inside LiveAuctionEngine.__init__ ----
+
+        # The TradeBiasGuard prevents over-trading in one direction after losses.
         self.bias_guard = TradeBiasGuard(
             max_consecutive_losses=2,
             cooldown_candles=5
         )
 
 
+        # The Stage12Controller manages the lifecycle of trades, including stop-loss orders.
         self.stage12 = Stage12Controller(
                         trade_engine=self.trade_engine,
                         persistence=self.persistence
                     )
-        # self.stage12 = Stage12Controller(
-        #                 trade_engine=self.V12_tradeEngine,
-        #                 persistence=self.persistence
-        #             )
 
+        # The DirectionalBiasGuard analyzes recent trade performance to identify and
+        # mitigate directional biases that are not profitable.
         self.directionaBias_guard = DirectionalBiasGuard(
             window=20,
             min_trades=5,
             loss_threshold=0.55
         )
 
+        # The CooldownManager enforces a waiting period after a losing trade to
+        # prevent immediate re-entry.
         self.cooldown = CooldownManager(
             cooldown_ms=3 * 60 * 1000
         )
 
-        # Stage-15: Pressure Tracker (TBQ/TSQ delta over 30 ticks)
+        # The PressureTracker monitors short-term order flow imbalances.
         self.pressure_tracker = PressureTracker(window=30)
         
-        # Stage-16: Context Module (H1 or Configured Timeframe)
+        # The H1Aggregator builds a higher-timeframe context to identify the dominant trend.
         self.h1_aggregator = H1Aggregator(
             sma_period=config.SMA_PERIOD, 
             bias_confirm_candles=config.BIAS_CONFIRM_CANDLES,
             timeframe_minutes=bias_timeframe_minutes
         )
 
+        # The OrderBookAnalyzer scans Level 2 data for liquidity and imbalances.
         self.orderbook = OrderBookAnalyzer(imbalance_ratio=1.5)
         
-        # Stage-18: Signal Generator (plan.md FR-SIG-001/002)
+        # The SignalGenerator identifies specific trade setups based on price action and technical indicators.
         self.signal_generator = SignalGenerator()
         
-        # Track last candle for H/L break detection
-        self.last_candles: Dict[str, Candle] = {}
-
-        # Stage-19: Volume/Liquidity Filter (plan.md FR-CTX-003)
-        # Load 5-day ADV for all tracked symbols
-        self.adv_cache: Dict[str, float] = {}
-        # Simple token usage (should ideally come from config/env)
+        # The HistoricalDataFetcher retrieves historical data for warming up the engine.
         self.fetcher = HistoricalDataFetcher(config.ACCESS_TOKEN, self.persistence)
         
-        # Initialize historical data for H1 and ADV
-        # NOTE: In live production, run historical_data_fetcher.py separately before start to save startup time
-        # Here we try to load from DB first
-        print("Initializing H1 & ADV data...")
-        # Pre-load for a few keys we know, or just rely on dynamic load
-        # For now, let's just instantiate. Actual warming happens when symbols added.
-
-        # ---- Footprint & Broadcaster ----
+        # The FootprintBuilder creates detailed volume footprint charts for micro-level analysis.
         self.footprints: Dict[str, FootprintBuilder] = {}
         self.last_vols: Dict[str, float] = {}
         self.broadcaster = None
 
+        # The RenkoAggregator builds Renko charts from tick data to filter out market noise.
         self.renko_aggregator = RenkoAggregator(on_renko_brick=self.on_renko_brick)
 
     def on_renko_brick(self, brick: Candle):
@@ -377,15 +373,12 @@ class LiveAuctionEngine:
 
     # -------- ticks --------
 
-    # def on_tick(self, tick: Tick):
-        # ticks only manage exits
-
-        # self.stage12.on_tick(
-        #         symbol=tick.symbol,
-        #         ltp=tick.ltp,
-        #         ts=tick.ts
-        #     )
     def on_tick(self, tick: Tick):
+        """
+        Processes a single market tick. This method is the primary entry point
+        for real-time market data and is responsible for managing the lifecycle
+        of open trades.
+        """
         # Constants for early trade protection
         MIN_HOLD_SECONDS = 180    # 3 minutes minimum hold
         MIN_PROFIT_PCT = 0.003    # 0.3% minimum profit before discretionary exits
@@ -557,6 +550,11 @@ class LiveAuctionEngine:
     # -------- candle close --------
 
     def on_candle_close(self, candle: Candle):
+        """
+        Processes a closed candle. This method is the primary entry point for
+        the core trading logic, where the system evaluates market structure and
+        identifies potential trade entries.
+        """
         self.stage12.on_candle_close(candle)
         self.last_candle_ts[candle.symbol] = candle.ts
         

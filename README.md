@@ -2,9 +2,19 @@
 
 This project is a trading bot that uses Auction Market Theory to make trading decisions. The core of the strategy is a `VolumeProfile` class that calculates the Value Area (VA) and Point of Control (POC) from a rolling window of candle data to determine the market regime.
 
+## Project Structure
+
+The project is organized into the following directories:
+
+-   `trading_core`: Contains the core components of the trading engine, including the `LiveAuctionEngine`, data models, and persistence layer.
+-   `data_handling`: Includes modules for fetching and processing historical data.
+-   `strategy`: Contains the implementation of the trading strategy, including the `AuctionContext` and other strategy components.
+-   `ui`: Includes the Flask-based UI for monitoring trades.
+-   `utils`: Contains utility scripts for analyzing backtest results.
+
 ## Trading Strategy
 
-The trading strategy is based on a regime-aware model that adapts to the current market structure, as identified by the `VolumeProfile` in `auction_theory.py` and implemented in the `AuctionContext` class in `stage9_context.py`.
+The trading strategy is based on a regime-aware model that adapts to the current market structure, as identified by the `VolumeProfile` in `strategy/auction_theory.py` and implemented in the `AuctionContext` class in `strategy/stage9_context.py`.
 
 The bot distinguishes between two primary market regimes:
 
@@ -20,12 +30,12 @@ This regime-based approach is designed to correct the "wrong side bias" of simpl
 
 ## Backtesting
 
-The `main.py` script is used for backtesting the trading strategy. It reads from a series of `.gz` files that contain historical tick data, and it simulates a live WebSocket feed to the trading engine. The backtesting script requires a running MongoDB instance to store and retrieve trade data.
+The `backtester.py` script is used for backtesting the trading strategy. It queries historical tick data from a QuestDB instance and simulates a live WebSocket feed to the trading engine.
 
 ### Prerequisites
 
 -   Python 3
--   MongoDB
+-   QuestDB
 
 ### Installation
 
@@ -40,31 +50,20 @@ The `main.py` script is used for backtesting the trading strategy. It reads from
     pip install -r requirements.txt
     ```
 
-3.  Install and start MongoDB. On a Debian/Ubuntu system, you can do this with the following commands:
+3.  Install and start QuestDB. You can do this with Docker:
     ```bash
-    # Import the GPG key
-    curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
-
-    # Create the package list file
-    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-
-    # Update the package manager and install MongoDB
-    sudo apt-get update
-    sudo apt-get install -y mongodb-org
-
-    # Start the MongoDB service
-    sudo systemctl start mongod
+    docker run -p 9000:9000 -p 8812:8812 questdb/questdb
     ```
 
 ### Running the Backtest
 
-To run the backtest, you will need to have a running MongoDB instance. You can then run the following command:
+To run the backtest, you will need to have a running QuestDB instance with historical tick data. You can then run the following command:
 
 ```bash
-python3 main.py
+python3 backtester.py --symbol <symbol> --from-date <YYYY-MM-DD> --to-date <YYYY-MM-DD>
 ```
 
-The backtesting script will then process the data in the `.gz` files and print the results of the trading strategy to the console.
+The backtesting script will then process the data and print a summary of the trading strategy's performance to the console.
 
 ## Live Trading
 
@@ -77,11 +76,8 @@ The `main_live.py` script is used to run the trading bot in a live market enviro
 
 ### Configuration
 
-1.  Open the `main_live.py` file.
-2.  Replace the placeholder `"YOUR_TOKEN_HERE"` with your actual Upstox API access token:
-    ```python
-    ACCESS_TOKEN = "your-upstox-access-token"
-    ```
+1.  Open the `config.py` file.
+2.  Replace the placeholder `"your_access_token"` with your actual Upstox API access token.
 
 ### Running the Live Trading Bot
 

@@ -3,7 +3,7 @@ import psycopg2
 from questdb.ingress import Sender
 from pymongo import MongoClient, ASCENDING
 from typing import Dict, List
-from models import *
+from trading_core.models import *
 from dataclasses import asdict
 import traceback
 import sys
@@ -80,6 +80,16 @@ class QuestDBPersistence:
                     low DOUBLE,
                     close DOUBLE,
                     volume DOUBLE
+                ) timestamp(ts);
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS ticks (
+                    symbol SYMBOL,
+                    ts TIMESTAMP,
+                    ltp DOUBLE,
+                    volume LONG,
+                    total_buy_qty LONG,
+                    total_sell_qty LONG
                 ) timestamp(ts);
                 """)
                 cur.execute("""
@@ -260,3 +270,19 @@ class QuestDBPersistence:
                 },
                 at=footprint['ts']
             )
+
+    def fetch_tick_data(self, symbol: str, from_date: str, to_date: str) -> List[Dict]:
+        """
+        Fetches tick data for a given symbol and date range.
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                query = """
+                SELECT * FROM ticks
+                WHERE symbol = %s
+                AND ts BETWEEN %s AND %s
+                ORDER BY ts;
+                """
+                cur.execute(query, (symbol, from_date, to_date))
+                rows = cur.fetchall()
+                return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
