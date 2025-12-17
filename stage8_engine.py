@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import time
 import threading
 from datetime import datetime
-from persistence import MongoPersistence
+from persistence import QuestDBPersistence
 from models import *
 import json
 from dataclasses import asdict
@@ -16,8 +16,6 @@ from footprint_engine import FootprintBuilder
 
 import os
 import sys
-# Ensure root module can be imported
-sys.path.append(os.path.join( "D:\\newFootprintChart\\"))
 import config
 # ============================
 # IN stage8_engine.py   
@@ -44,6 +42,7 @@ from h1_aggregator import H1Aggregator
 from orderbook_analyzer import OrderBookAnalyzer
 from signal_generator import SignalGenerator
 from historical_data_fetcher import HistoricalDataFetcher
+from renko_aggregator import RenkoAggregator
 
 
 # -------------------------
@@ -110,7 +109,7 @@ class LiveAuctionEngine:
         self.last_candle_ts: Dict[str, int] = {}
         
         db_name = persistence_db_name if persistence_db_name else config.DB_NAME
-        self.persistence = MongoPersistence(db_name=db_name)
+        self.persistence = QuestDBPersistence(db_name=db_name)
         self.open_trades = {}
         self.loadFromDb()
 
@@ -171,7 +170,7 @@ class LiveAuctionEngine:
         # Load 5-day ADV for all tracked symbols
         self.adv_cache: Dict[str, float] = {}
         # Simple token usage (should ideally come from config/env)
-        self.fetcher = HistoricalDataFetcher(config.ACCESS_TOKEN)
+        self.fetcher = HistoricalDataFetcher(config.ACCESS_TOKEN, self.persistence)
         
         # Initialize historical data for H1 and ADV
         # NOTE: In live production, run historical_data_fetcher.py separately before start to save startup time
@@ -184,6 +183,17 @@ class LiveAuctionEngine:
         self.footprints: Dict[str, FootprintBuilder] = {}
         self.last_vols: Dict[str, float] = {}
         self.broadcaster = None
+
+        self.renko_aggregator = RenkoAggregator(on_renko_brick=self.on_renko_brick)
+
+    def on_renko_brick(self, brick: Candle):
+        # This method will be called by the RenkoAggregator when a new brick is formed.
+        # We can then broadcast it to the UI.
+        if self.broadcaster:
+            self.broadcaster(brick.symbol, {
+                "type": "renko",
+                "brick": asdict(brick)
+            })
 
     def set_broadcaster(self, fn):
         self.broadcaster = fn
@@ -255,12 +265,7 @@ class LiveAuctionEngine:
                  snap_doc["symbol"] = symbol
                  # Ensure keys are strings for Mongo (defaultdict might have int/float keys)
                  snap_doc["levels"] = {str(k): v for k, v in snap.get("levels", {}).items()}
-                 
-                 self.persistence.db.footprints.update_one(
-                     {"symbol": symbol, "ts": snap["ts"], "type": "footprint"},
-                     {"$set": snap_doc},
-                     upsert=True
-                 )
+                 self.persistence.save_footprint(symbol, snap_doc)
              except Exception as e:
                  print(f"Footprint Save Error: {e}")
              
@@ -388,6 +393,9 @@ class LiveAuctionEngine:
         # 1. Always update pressure tracker (even without open trade)
         self.pressure_tracker.update(tick)
         
+        # Update renko aggregator
+        self.renko_aggregator.on_tick(tick)
+
         if not self.trade_engine.has_open_trade(tick.symbol):
             return
 
