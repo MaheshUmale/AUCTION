@@ -755,8 +755,11 @@ class LiveMarketRouter:
         full_feed = feed.get("fullFeed", {})
         market = full_feed.get("marketFF") or full_feed.get("indexFF")
 
+        parsed_tick = None
+        parsed_candles = []
+
         if not market:
-            return
+            return None, []
 
         # 1. Process Tick and associated data
         ltpc = market.get('ltpc')
@@ -797,6 +800,7 @@ class LiveMarketRouter:
 
             try:
                 self.engine.persistence.save_tick_data(record)
+                parsed_tick = record
             except Exception as e:
                 print(f"Error saving tick data: {e}")
 
@@ -817,8 +821,11 @@ class LiveMarketRouter:
                 }
                 try:
                     self.engine.persistence.save_tick_data(candle_record)
+                    parsed_candles.append(candle_record)
                 except Exception as e:
                     print(f"Error saving candle data: {e}")
+
+        return parsed_tick, parsed_candles
 
     def _extract_ltp_ts(self, ff: dict):
         """
@@ -850,26 +857,22 @@ class LiveMarketRouter:
 
     def on_message(self, data: dict):
         feeds = data.get("feeds", {})
-        current_ts = int(data.get("currentTs", time.time() * 1000))
 
         for symbol, feed in feeds.items():
-            # Save structured feed data
-            try:
-                self._save_feed_data(symbol, feed)
-            except Exception as e:
-                print(f"[ERROR] Failed to save feed data for {symbol}: {e}")
+            parsed_tick, parsed_candles = self._save_feed_data(symbol, feed)
 
-            ff = feed.get("fullFeed", {})
-            market = ff.get("marketFF") or ff.get("indexFF")
-            if not market:
-                continue
+            if parsed_tick:
+                tick = Tick(
+                    symbol=symbol,
+                    ltp=parsed_tick['ltp'],
+                    ts=parsed_tick['timestamp'] // 1_000_000,
+                    volume=parsed_tick.get('vtt', 0),
+                    total_buy_qty=parsed_tick.get('tbq', 0),
+                    total_sell_qty=parsed_tick.get('tsq', 0)
+                )
+                self.engine.on_tick(tick)
 
-            # ---- tick ----
-            ltp, ts = self._extract_ltp_ts(ff)
-
-            if ltp is not None:
-                # WARMUP CHECK: If we haven't seen this symbol, warm up H1 & ADV
-                # Skip in simulation mode (don't fetch live API data for backtest simulation)
+                # WARMUP CHECK
                 if not self.engine.simulation_mode and symbol not in self.engine.h1_aggregator.h1_candles:
                     try:
                         self.engine.h1_aggregator.initialize_symbol(symbol)
@@ -880,95 +883,49 @@ class LiveMarketRouter:
                     except Exception as e:
                         print(f"Warmup failed for {symbol}: {e}")
 
-                # Extract extended fields if available
-                vol = float(market.get("vol", 0))
-                tbq = int(market.get("tbq", 0))
-                tsq = int(market.get("tsq", 0))
-                
-                self.engine.on_tick(
-                    Tick(symbol=symbol,
-                    ltp=ltp,
-                    ts=ts,
-                    volume=vol,
-                    total_buy_qty=tbq,
-                    total_sell_qty=tsq)
-                )
-                
-                # Stage-17: Update order book analyzer with Level 2 data
-                self.engine.orderbook.update(symbol, market, ts)
+                # Update order book and footprint
+                ff = feed.get("fullFeed", {})
+                market = ff.get("marketFF") or ff.get("indexFF")
+                if market:
+                    self.engine.orderbook.update(symbol, market, tick.ts)
+                    last_vol = self.engine.last_vols.get(symbol, tick.volume)
+                    trade_vol = tick.volume - last_vol
+                    if trade_vol < 0: trade_vol = 0
+                    self.engine.last_vols[symbol] = tick.volume
+                    ltq = parsed_tick.get('ltq', 0)
+                    if trade_vol <= 0 and ltq > 0:
+                        trade_vol = ltq
+                    if trade_vol > 0:
+                        self.engine.update_footprint(symbol, tick.ltp, trade_vol, tick.ts)
 
-                # ---- Footprint Update ----
-                # Calculate trade volume delta
-                last_vol = self.engine.last_vols.get(symbol, vol)
-                trade_vol = vol - last_vol
-                # Handle rollover (reset to 0) or bad data?
-                if trade_vol < 0: trade_vol = 0 
-                self.engine.last_vols[symbol] = vol
-                
-                # Fallback to LTQ if Vol delta is 0
-                ltq = int(market.get("ltpc", {}).get("ltq", 0))
-                
-                if trade_vol <= 0 and ltq > 0:
-                     trade_vol = ltq
-                
-                if trade_vol > 0:
-                     # print(f"DEBUG: FP UPDATE {symbol} Vol={trade_vol}") 
-                     self.engine.update_footprint(symbol, ltp, trade_vol, ts)
-                else:
-                     # print(f"DEBUG: Skipping FP {symbol} Vol=0 raw_vol={vol}")
-                     pass
-                
-                # ---- Broadcast DOM ----
-                if self.engine.broadcaster:
-                    # Construct DOM message
-                    # marketLevel has bidAskQuote
-                    # Frontend expects: {type: 'dom', symbol: ..., bids: {p:q}, asks: {p:q}}
-                    ml = market.get("marketLevel", {})
-                    quotes = ml.get("bidAskQuote", [])
-                    bids = {}
-                    asks = {}
-                    for q in quotes:
-                        # Upstox V3 format: {bidP, bidQ, askP, askQ}
-                        if "bidP" in q and q["bidP"]: bids[str(q["bidP"])] = q.get("bidQ", 0)
-                        if "askP" in q and q["askP"]: asks[str(q["askP"])] = q.get("askQ", 0)
-                    
-                    dom_msg = {
-                        "type": "dom",
-                        "symbol": symbol,
-                        "bids": bids,
-                        "asks": asks,
-                        "ts": ts
-                    }
-                    self.engine.broadcaster(symbol, dom_msg)
+                    # Broadcast DOM
+                    if self.engine.broadcaster:
+                        ml = market.get("marketLevel", {})
+                        quotes = ml.get("bidAskQuote", [])
+                        bids, asks = {}, {}
+                        for q in quotes:
+                            if "bidP" in q and q["bidP"]: bids[str(q["bidP"])] = q.get("bidQ", 0)
+                            if "askP" in q and q["askP"]: asks[str(q["askP"])] = q.get("askQ", 0)
 
-            # ---- candle close from WSS snapshot ----
-            if market and "marketOHLC" in market:
-                ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
-                for o in ohlc_list:
-                    try :
-                        if "interval" in o:
-                            if o["interval"] == "I1":
-                                candle_ts = int(o["ts"])
-                                if self.engine.last_candle_ts.get(symbol) == candle_ts:
-                                    continue
-                                
-                                # print(f"DEBUG: Candle Close Triggered via WSS for {symbol} @ {datetime.now()}")
-                                candle = Candle(
-                                    symbol=symbol,
-                                    open=float(o["open"]),
-                                    high=float(o["high"]),
-                                    low=float(o["low"]),
-                                    close=float(o["close"]),
-                                    volume=float(o.get("vol", 0)),
-                                    ts=candle_ts,
-                                )
-                                self.engine.on_candle_close(candle)
-                    except :
-                        import traceback
-                        traceback.print_exc()
-                        # print(" RECEIVED ")
-                        # print(data)
-                        # exit(0)
+                        dom_msg = {"type": "dom", "symbol": symbol, "bids": bids, "asks": asks, "ts": tick.ts}
+                        self.engine.broadcaster(symbol, dom_msg)
+
+            for candle_data in parsed_candles:
+                if candle_data['feed_type'] == 'CANDLE_I1':
+                    candle_ts = candle_data['timestamp'] // 1_000_000
+                    if self.engine.last_candle_ts.get(symbol) == candle_ts:
+                        continue
+
+                    candle = Candle(
+                        symbol=symbol,
+                        open=float(candle_data["open"]),
+                        high=float(candle_data["high"]),
+                        low=float(candle_data["low"]),
+                        close=float(candle_data["close"]),
+                        volume=float(candle_data.get("vtt", 0)),
+                        ts=candle_ts,
+                    )
+                    self.engine.on_candle_close(candle)
 
 
 # -------------------------
