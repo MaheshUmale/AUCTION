@@ -1,6 +1,6 @@
 from collections import deque
 from typing import Dict, Deque, List, Optional
-from auction_theory import VolumeProfile
+from strategy.auction_theory import VolumeProfile
 import numpy as np
 import config
 class AuctionContext:

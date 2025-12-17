@@ -15,8 +15,8 @@ from datetime import datetime
 from google.protobuf.json_format import MessageToDict
 import MarketDataFeedV3_pb2 as pb
 
-from stage8_engine import LiveAuctionEngine, LiveMarketRouter, Monitor
-import trade_viewer
+from trading_core.stage8_engine import LiveAuctionEngine, LiveMarketRouter, Monitor
+from ui import trade_viewer
 
 import config
 ACCESS_TOKEN = config.ACCESS_TOKEN

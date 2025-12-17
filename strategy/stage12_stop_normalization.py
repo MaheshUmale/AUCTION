@@ -5,7 +5,7 @@
 from dataclasses import dataclass
 from typing import Dict, Optional
 import math
-from models import Candle,Tick,Trade
+from trading_core.models import Candle,Tick,Trade
  
 
 from typing import Optional, Tuple
