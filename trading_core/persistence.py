@@ -163,7 +163,7 @@ class QuestDBPersistence:
                     'price': level.price,
                     'last_used_ts': level.last_used_ts,
                 },
-                at=level.created_ts
+                at=int(level.created_ts.timestamp() * 1000000)
             )
 
     def load_levels(self, symbol: str) -> List[Dict]:
@@ -196,7 +196,7 @@ class QuestDBPersistence:
                     'stop_price': tradeObj.stop_price,
                     'tp_price': tradeObj.tp_price,
                 },
-                at=tradeObj.entry_ts
+                at=int(tradeObj.entry_ts.timestamp() * 1000000)
             )
 
     def close_trade(self, symbol: str, exit_price: float, exit_ts: int, reason: str, pnl:float):
@@ -270,7 +270,7 @@ class QuestDBPersistence:
                         'close': candle['close'],
                         'volume': candle['volume'],
                     },
-                    at=candle['ts']
+                    at=int(candle['ts'].timestamp() * 1000000)
                 )
         return len(candles)
 
@@ -303,7 +303,7 @@ class QuestDBPersistence:
                     'volume': footprint['volume'],
                     'levels': json.dumps(footprint['levels']),
                 },
-                at=footprint['ts']
+                at=int(footprint['ts'].timestamp() * 1000000)
             )
 
     def fetch_tick_data(self, symbol: str, from_date: str, to_date: str) -> List[Dict]:
@@ -313,7 +313,7 @@ class QuestDBPersistence:
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 query = """
-                SELECT timestamp as ts, ltp, vtt as volume, tbq as total_buy_qty, tsq as total_sell_qty
+                SELECT timestamp as ts, instrument_key as symbol, ltp, vtt as volume, tbq as total_buy_qty, tsq as total_sell_qty
                 FROM tick_data
                 WHERE instrument_key = %s
                 AND timestamp BETWEEN %s AND %s
