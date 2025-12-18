@@ -1,6 +1,7 @@
 # load_data.py
 import json
 import argparse
+import gzip
 from trading_core.persistence import QuestDBPersistence
 from datetime import datetime
 
@@ -9,7 +10,7 @@ def load_data(symbol: str, file_path: str):
     Loads historical tick data from a JSON file into QuestDB.
     """
     persistence = QuestDBPersistence(db_name="auction_trading_backtest")
-    with open(file_path, 'r') as f:
+    with gzip.open(file_path, 'rt') as f:
         data = json.load(f)
         for record in data:
             full_feed = record.get("fullFeed", {})
@@ -24,11 +25,11 @@ def load_data(symbol: str, file_path: str):
                     'instrument_key': symbol,
                     'feed_type': 'TICK',
                     'ltp': ltpc.get('ltp'),
-                    'ltq': ltpc.get('ltq'),
+                    'ltq': int(ltpc.get('ltq')),
                     'cp': market.get('cp'),
-                    'oi': market.get('oi'),
+                    'oi': int(market.get('oi')),
                     'atp': market.get('atp'),
-                    'vtt': market.get('vtt'),
+                    'vtt': int(market.get('vtt')),
                     'tbq': market.get('tbq'),
                     'tsq': market.get('tsq'),
                     'insertion_time': datetime.now()

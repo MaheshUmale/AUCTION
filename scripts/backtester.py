@@ -56,10 +56,10 @@ def run_backtest(symbol: str, from_date: str, to_date: str):
 
             # 4. Summarize and Plot Results
             trades = engine.trade_engine.closed_trades
-            if trades:
-                summarize(trades)
-            else:
-                print("No trades were executed during the backtest.")
+        if trades:
+            summarize(trades)
+        else:
+            print("No trades were executed during the backtest.")
 
     finally:
         router.shutdown()
