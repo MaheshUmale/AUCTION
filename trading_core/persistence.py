@@ -1,12 +1,13 @@
 # persistence.py
 import psycopg2
-from questdb.ingress import Sender
+from questdb.ingress import Sender, TimestampNanos
 from pymongo import MongoClient, ASCENDING
 from typing import Dict, List
 from trading_core.models import *
 from dataclasses import asdict
 import traceback
 import sys
+from datetime import datetime
 
 class QuestDBPersistence:
     def __init__(self, host="localhost", ingest_port=9009, query_port=8812, db_name="auction_trading"):
@@ -29,7 +30,7 @@ class QuestDBPersistence:
 
     def _create_tick_data_table(self, cur):
         cur.execute("""
-        CREATE TABLE IF NOT EXISTS 'tick_data' (
+        CREATE TABLE IF NOT EXISTS tick_data (
             timestamp TIMESTAMP,
             instrument_key SYMBOL CAPACITY 512 CACHE,
             feed_type SYMBOL CAPACITY 256 CACHE,
@@ -312,10 +313,11 @@ class QuestDBPersistence:
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 query = """
-                SELECT * FROM ticks
-                WHERE symbol = %s
-                AND ts BETWEEN %s AND %s
-                ORDER BY ts;
+                SELECT timestamp as ts, ltp, vtt as volume, tbq as total_buy_qty, tsq as total_sell_qty
+                FROM tick_data
+                WHERE instrument_key = %s
+                AND timestamp BETWEEN %s AND %s
+                ORDER BY timestamp;
                 """
                 cur.execute(query, (symbol, from_date, to_date))
                 rows = cur.fetchall()
@@ -323,6 +325,11 @@ class QuestDBPersistence:
 
     def save_tick_data(self, data: Dict):
         with Sender.from_conf(self.conf) as sender:
+
+            insertion_time = data.get('insertion_time')
+            if isinstance(insertion_time, datetime):
+                insertion_time = int(insertion_time.timestamp() * 1_000_000)
+
             sender.row(
                 'tick_data',
                 symbols={
@@ -352,7 +359,7 @@ class QuestDBPersistence:
                     'high': data.get('high'),
                     'low': data.get('low'),
                     'close': data.get('close'),
-                    'insertion_time': data.get('insertion_time')
+                    'insertion_time': insertion_time
                 },
-                at=data['timestamp']
+                at=TimestampNanos(data['timestamp'] * 1000000)
             )
