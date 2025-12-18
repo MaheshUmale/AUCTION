@@ -31,13 +31,13 @@ H1_COLLECTION_PREFIX = "context_candles_"  # Suffix will be "{minutes}m"
 # -------------------------
 # Timeframe for Bias Calculation (Context)
 # Options: 15, 30, 60, etc.
-BIAS_TIMEFRAME_MINUTES = 5 
+BIAS_TIMEFRAME_MINUTES = 15 
 
 # SMA Period for Bias
-SMA_PERIOD = 20
+SMA_PERIOD = 10
 
 # Confirmation Candles for Bias
-BIAS_CONFIRM_CANDLES = 3
+BIAS_CONFIRM_CANDLES = 2
 
 # -------------------------
 # SYSTEM MODES
@@ -51,7 +51,7 @@ DEFAULT_SIMULATION_MODE = False
 BASE_URL = "https://api.upstox.com/v3"
 # Token can be loaded from env or kept here
 
-ACCESS_TOKEN = 'eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTQyMjI0MzAyZjM4MjBiODdiZWMxZjkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NTk0MTgyNywiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY2MDA4ODAwfQ.qMZfDJzx07IhLCNx70SMYAP4ejVvAcIbFY0hBSBbFlg'
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTQzNzA0MGVlMGM5ODFhMzg1ODNlMGMiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NjAyNzMyOCwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY2MDk1MjAwfQ.wPCQbWCLS5Pjrv_875jU_QLfE6jpdCj_BoomV05fKKU"
 
 
 # -------------------------

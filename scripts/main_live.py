@@ -11,6 +11,19 @@ import threading
 import time
 from datetime import datetime
 
+import sys
+import os
+
+# Get the absolute path of the directory containing the script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.join(current_dir, "..") # Adjust ".." based on your structure
+
+# Add the project root to the system path, inserting it at the beginning
+sys.path.insert(0, project_root)
+
+
+
+
 
 from google.protobuf.json_format import MessageToDict
 import MarketDataFeedV3_pb2 as pb
@@ -62,6 +75,8 @@ import upstox_client
 
 def on_error(error):
     print(f"WebSocket Error: {error} {datetime.now()}")
+    import traceback
+    traceback.print_exc()
 
 def on_open():
     print(f"WebSocket Connected (SDK)! {datetime.now()}")
@@ -203,4 +218,5 @@ if __name__ == "__main__":
         print("Caught KeyboardInterrupt, shutting down...")
     finally:
         router.shutdown()
+
         print("System shut down.")

@@ -111,6 +111,7 @@ class LiveAuctionEngine:
         # self.V12_tradeEngine = V12TradeEngine()
         self.structure: Dict[str, List[StructureLevel]] = {}
         self.last_candle_ts: Dict[str, int] = {}
+        self.last_candles: Dict[str, Candle] = {}
         
         db_name = persistence_db_name if persistence_db_name else config.DB_NAME
         self.persistence = QuestDBPersistence(db_name=db_name)
@@ -569,8 +570,13 @@ class LiveAuctionEngine:
         self.h1_aggregator.on_1min_candle(candle)
 
         last_ts = self.persistence.get_last_candle_ts(candle.symbol)
-        if last_ts is not None and candle.ts <= last_ts:
+        #convert last_ts datetime.datetime to int
+        if last_ts is not None and candle.ts is not None and int(candle.ts) <= int(last_ts.timestamp())*1000000:
+            print(f"before return  CHECK VALUUES last_ts = {last_ts}  = {int(last_ts.timestamp())*1000000}  and {candle.ts}" )
+        
             return  # already processed
+        print(f" after return CHECK VALUUES last_ts = {last_ts}  = {int(last_ts.timestamp())*1000000}  and {candle.ts}" )
+       
         self.persistence.update_last_candle_ts(candle.symbol, candle.ts)
 
         if self.trade_engine.has_open_trade(candle.symbol):
@@ -755,9 +761,12 @@ class LiveMarketRouter:
     def shutdown(self):
         """Gracefully shuts down the thread pool."""
         print("Shutting down DB writer thread pool...")
-        self.executor.shutdown(wait=True)
-        print("DB writer thread pool shut down.")
-
+        try:
+            self.executor.shutdown(wait=True)
+            print("DB writer thread pool shut down.")
+        except RuntimeError as e:
+            if "after shutdown" in str(e):
+                pass # Ignore expected shutdown error
     def _save_feed_data(self, symbol: str, feed: dict):
         now = datetime.now()
         full_feed = feed.get("fullFeed", {})
@@ -831,7 +840,11 @@ class LiveMarketRouter:
                     self.engine.persistence.save_tick_data(candle_record)
                     parsed_candles.append(candle_record)
                 except Exception as e:
-                    print(f"Error saving candle data: {e}")
+                    print(int(ohlc['ts']))
+                    print("---------------------")
+                    print(f"Error Process Candle Data saving candle data: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         return parsed_tick, parsed_candles
 
@@ -864,12 +877,18 @@ class LiveMarketRouter:
 
 
     def on_message(self, data: dict):
-        feeds = data.get("feeds", {})
-        for symbol, feed in feeds.items():
-            future = self.executor.submit(self._save_feed_data, symbol, feed)
-            future.add_done_callback(
-                lambda f, s=symbol, fd=feed: self._process_saved_data(f, s, fd)
-            )
+        try:
+            feeds = data.get("feeds", {})
+            for symbol, feed in feeds.items():
+                future = self.executor.submit(self._save_feed_data, symbol, feed)
+                future.add_done_callback(
+                    lambda f, s=symbol, fd=feed: self._process_saved_data(f, s, fd)
+                )
+     
+        except RuntimeError as e:
+            if "after shutdown" in str(e):
+                pass # Ignore expected shutdown errors
+       
 
     def _process_saved_data(self, future, symbol, feed):
         try:
@@ -905,10 +924,10 @@ class LiveMarketRouter:
             if market:
                 self.engine.orderbook.update(symbol, market, tick.ts)
                 last_vol = self.engine.last_vols.get(symbol, tick.volume)
-                trade_vol = tick.volume - last_vol
+                trade_vol = int(tick.volume) - int(last_vol)
                 if trade_vol < 0: trade_vol = 0
                 self.engine.last_vols[symbol] = tick.volume
-                ltq = parsed_tick.get('ltq', 0)
+                ltq = int(parsed_tick.get('ltq', 0))
                 if trade_vol <= 0 and ltq > 0:
                     trade_vol = ltq
                 if trade_vol > 0:
@@ -938,7 +957,7 @@ class LiveMarketRouter:
                     high=float(candle_data["high"]),
                     low=float(candle_data["low"]),
                     close=float(candle_data["close"]),
-                    volume=float(candle_data.get("vtt", 0)),
+                    volume= int(v) if (v := candle_data.get("vtt")) is not None else 0,
                     ts=candle_ts,
                 )
                 self.engine.on_candle_close(candle)

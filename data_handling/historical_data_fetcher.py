@@ -123,18 +123,18 @@ class HistoricalDataFetcher:
         print(f"Saved {saved_count} {timeframe_minutes}-min candles via persistence layer.")
         return saved_count
 
-    def load_h1_candles(self, symbol: str, limit: int = 100) -> List[Candle]:
+    def load_h1_candles(self, symbol: str,BIAS_TIMEFRAME_MINUTES, limit: int = 100) -> List[Candle]:
         """
         Loads H1 (60min) candles from the persistence layer.
         """
-        candles_data = self.persistence.load_context_candles(symbol, 60, limit)
+        candles_data = self.persistence.load_context_candles(symbol,BIAS_TIMEFRAME_MINUTES , limit)
         return [Candle(**c) for c in candles_data]
 
     def calculate_5day_adv(self, symbol: str) -> float:
         """
         Calculates the 5-day Average Daily Volume.
         """
-        h1_candles = self.load_h1_candles(symbol, limit=200)
+        h1_candles = self.load_h1_candles(symbol,config.BIAS_TIMEFRAME_MINUTES, limit=200)
         if not h1_candles:
             print(f"ADV calculation for {symbol} skipped: No H1 candles found.")
             return 0.0

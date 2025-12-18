@@ -202,7 +202,7 @@ class QuestDBPersistence:
     def close_trade(self, symbol: str, exit_price: float, exit_ts: int, reason: str, pnl:float):
         trade = self.get_open_trade(symbol)
         if trade:
-            with Sender(self.ingest_host, self.ingest_port) as sender:
+            with Sender.from_conf(self.conf) as sender:
                 sender.row(
                     'closed_trades',
                     symbols={
@@ -258,7 +258,7 @@ class QuestDBPersistence:
 
     def save_context_candles(self, symbol: str, candles: List[Dict], timeframe_minutes: int) -> int:
         table_name = f"context_candles_{timeframe_minutes}m"
-        with Sender(self.ingest_host, self.ingest_port) as sender:
+        with Sender.from_conf(self.conf) as sender:
             for candle in candles:
                 sender.row(
                     table_name,
@@ -283,15 +283,16 @@ class QuestDBPersistence:
                 return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
 
     def update_last_candle_ts(self, symbol: str, ts: int):
-        with Sender(self.ingest_host, self.ingest_port) as sender:
+        with Sender.from_conf(self.conf) as sender:
+            print(ts)
             sender.row(
                 'symbol_state',
                 symbols={'symbol': symbol},
-                at=ts
+                at=TimestampNanos(ts) if len(str(ts)) > 13 else TimestampNanos(ts*1000)
             )
 
     def save_footprint(self, symbol: str, footprint: Dict):
-        with Sender(self.ingest_host, self.ingest_port) as sender:
+        with Sender.from_conf(self.conf) as sender:
             sender.row(
                 'footprints',
                 symbols={'symbol': symbol},
@@ -361,5 +362,5 @@ class QuestDBPersistence:
                     'close': data.get('close'),
                     'insertion_time': insertion_time
                 },
-                at=TimestampNanos(data['timestamp'] * 1000000)
+                at=TimestampNanos( data['timestamp'] if len(str(data['timestamp']))>13 else data['timestamp']*1000 ) #@FIXME... CHECK ..TS IS CORRECT 
             )
