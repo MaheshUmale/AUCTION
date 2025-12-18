@@ -11,6 +11,8 @@ The project is organized into the following directories:
 -   `strategy`: Contains the implementation of the trading strategy, including the `AuctionContext` and other strategy components.
 -   `ui`: Includes the Flask-based UI for monitoring trades.
 -   `utils`: Contains utility scripts for analyzing backtest results.
+-   `data`: Contains historical data files for backtesting.
+-   `scripts`: Contains standalone scripts for various tasks, such as backtesting, live trading, and data management.
 
 ## Trading Strategy
 
@@ -30,7 +32,7 @@ This regime-based approach is designed to correct the "wrong side bias" of simpl
 
 ## Backtesting
 
-The `backtester.py` script is used for backtesting the trading strategy. It queries historical tick data from a QuestDB instance and simulates a live WebSocket feed to the trading engine.
+The `backtester.py` script, located in the `scripts` directory, is used for backtesting the trading strategy. It queries historical tick data from a QuestDB instance and simulates a live WebSocket feed to the trading engine.
 
 ### Prerequisites
 
@@ -60,14 +62,14 @@ The `backtester.py` script is used for backtesting the trading strategy. It quer
 To run the backtest, you will need to have a running QuestDB instance with historical tick data. You can then run the following command:
 
 ```bash
-python3 backtester.py --symbol <symbol> --from-date <YYYY-MM-DD> --to-date <YYYY-MM-DD>
+python3 scripts/backtester.py --symbol <symbol> --from-date <YYYY-MM-DD> --to-date <YYYY-MM-DD>
 ```
 
 The backtesting script will then process the data and print a summary of the trading strategy's performance to the console.
 
 ## Live Trading
 
-The `main_live.py` script is used to run the trading bot in a live market environment. It connects to the Upstox WebSocket feed to receive real-time market data.
+The `main_live.py` script, located in the `scripts` directory, is used to run the trading bot in a live market environment. It connects to the Upstox WebSocket feed to receive real-time market data.
 
 ### Prerequisites
 
@@ -84,10 +86,20 @@ The `main_live.py` script is used to run the trading bot in a live market enviro
 To run the live trading bot, execute the following command:
 
 ```bash
-python3 main_live.py
+python3 scripts/main_live.py
 ```
 
 The bot will then connect to the Upstox WebSocket feed, and the monitor will print a summary of open and closed trades to the console every 5 seconds.
+
+## Scripts
+
+The `scripts` directory contains a collection of standalone Python scripts for various tasks related to the trading bot. Here's a brief overview of the most important ones:
+
+-   `backtester.py`: The main script for running backtests of the trading strategy.
+-   `main_live.py`: The main script for running the trading bot in a live market environment.
+-   `backfill_ticks.py`: A script for backfilling historical tick data from an external source into QuestDB.
+-   `debug_db.py`: A utility script for debugging and inspecting the contents of the QuestDB database.
+-   `rehydrate_history.py`: A script for rehydrating historical data from a file into the database.
 
 ## Dataflow and Replay
 
