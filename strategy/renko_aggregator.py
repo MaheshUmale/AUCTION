@@ -2,7 +2,7 @@
 # FILE: renko_aggregator.py
 # =========================
 
-from models import Tick, Candle
+from trading_core.models import Tick, Candle
 from typing import List, Optional, Callable
 import numpy as np
 

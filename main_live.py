@@ -195,6 +195,12 @@ if __name__ == "__main__":
 
     print("[SYSTEM] Live trading system started")
 
-    # Keep main thread alive
-    while True:
-        pass
+    # Keep main thread alive, with graceful shutdown
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Caught KeyboardInterrupt, shutting down...")
+    finally:
+        router.shutdown()
+        print("System shut down.")
