@@ -25,41 +25,41 @@ def run_backtest(symbol: str, from_date: str, to_date: str):
 
     try:
         # 2. Fetch Historical Data from QuestDB
-    ticks = persistence.fetch_tick_data(symbol, from_date, to_date)
-    if not ticks:
-        print(f"No data found for {symbol} in the given date range.")
-        return
+        ticks = persistence.fetch_tick_data(symbol, from_date, to_date)
+        if not ticks:
+            print(f"No data found for {symbol} in the given date range.")
+            return
 
-    # 3. Simulate Live Ticks
-    print(f"Simulating {len(ticks)} ticks...")
-    for tick_data in ticks:
-        tick = Tick(**tick_data)
-        # The router expects a message format similar to the live feed.
-        message = {
-            "feeds": {
-                symbol: {
-                    "fullFeed": {
-                        "marketFF": {
-                            "ltpc": {
-                                "ltp": tick.ltp,
-                                "ltt": tick.ts
-                            },
-                            "vol": tick.volume,
-                            "tbq": tick.total_buy_qty,
-                            "tsq": tick.total_sell_qty
+        # 3. Simulate Live Ticks
+        print(f"Simulating {len(ticks)} ticks...")
+        for tick_data in ticks:
+            tick = Tick(**tick_data)
+            # The router expects a message format similar to the live feed.
+            message = {
+                "feeds": {
+                    symbol: {
+                        "fullFeed": {
+                            "marketFF": {
+                                "ltpc": {
+                                    "ltp": tick.ltp,
+                                    "ltt": tick.ts
+                                },
+                                "vol": tick.volume,
+                                "tbq": tick.total_buy_qty,
+                                "tsq": tick.total_sell_qty
+                            }
                         }
                     }
                 }
             }
-        }
-        router.on_message(message)
+            router.on_message(message)
 
-        # 4. Summarize and Plot Results
-        trades = engine.trade_engine.closed_trades
-        if trades:
-            summarize(trades)
-        else:
-            print("No trades were executed during the backtest.")
+            # 4. Summarize and Plot Results
+            trades = engine.trade_engine.closed_trades
+            if trades:
+                summarize(trades)
+            else:
+                print("No trades were executed during the backtest.")
 
     finally:
         router.shutdown()
