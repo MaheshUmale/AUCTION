@@ -8,6 +8,7 @@ from dataclasses import asdict
 import traceback
 import sys
 from datetime import datetime
+import json
 
 class QuestDBPersistence:
     def __init__(self, host="localhost", ingest_port=9009, query_port=8812, db_name="auction_trading"):
@@ -18,6 +19,23 @@ class QuestDBPersistence:
         self.db_name = db_name
         self.conf = f'tcp::addr={self.ingest_host}:{self.ingest_port};'
         self._create_tables()
+
+    def _to_nanos(self, ts):
+        if isinstance(ts, datetime):
+            return TimestampNanos(int(ts.timestamp() * 1_000_000_000))
+        elif isinstance(ts, int):
+            # If timestamp is in seconds, convert to nanoseconds
+            if len(str(ts)) == 10:
+                return TimestampNanos(ts * 1_000_000_000)
+            # If timestamp is in milliseconds, convert to nanoseconds
+            elif len(str(ts)) == 13:
+                return TimestampNanos(ts * 1_000_000)
+            # If timestamp is in microseconds, convert to nanoseconds
+            elif len(str(ts)) == 16:
+                return TimestampNanos(ts * 1000)
+            # Assume it's already in nanoseconds
+            return TimestampNanos(ts)
+        return ts
 
     def _get_conn(self):
         return psycopg2.connect(
@@ -161,9 +179,9 @@ class QuestDBPersistence:
                 },
                 columns={
                     'price': level.price,
-                    'last_used_ts': level.last_used_ts,
+                    'last_used_ts': self._to_nanos(level.last_used_ts),
                 },
-                at=int(level.created_ts.timestamp() * 1000000)
+                at=self._to_nanos(level.created_ts)
             )
 
     def load_levels(self, symbol: str) -> List[Dict]:
@@ -196,7 +214,7 @@ class QuestDBPersistence:
                     'stop_price': tradeObj.stop_price,
                     'tp_price': tradeObj.tp_price,
                 },
-                at=int(tradeObj.entry_ts.timestamp() * 1000000)
+                at=self._to_nanos(tradeObj.entry_ts)
             )
 
     def close_trade(self, symbol: str, exit_price: float, exit_ts: int, reason: str, pnl:float):
@@ -218,7 +236,7 @@ class QuestDBPersistence:
                         'exit_price': exit_price,
                         'pnl': pnl,
                     },
-                    at=exit_ts
+                    at=self._to_nanos(exit_ts)
                 )
             with self._get_conn() as conn:
                 with conn.cursor() as cur:
@@ -270,7 +288,7 @@ class QuestDBPersistence:
                         'close': candle['close'],
                         'volume': candle['volume'],
                     },
-                    at=int(candle['ts'].timestamp() * 1000000)
+                    at=self._to_nanos(candle['ts'])
                 )
         return len(candles)
 
@@ -284,11 +302,10 @@ class QuestDBPersistence:
 
     def update_last_candle_ts(self, symbol: str, ts: int):
         with Sender.from_conf(self.conf) as sender:
-            print(ts)
             sender.row(
                 'symbol_state',
                 symbols={'symbol': symbol},
-                at=TimestampNanos(ts) if len(str(ts)) > 13 else TimestampNanos(ts*1000)
+                at=self._to_nanos(ts)
             )
 
     def save_footprint(self, symbol: str, footprint: Dict):
@@ -304,7 +321,7 @@ class QuestDBPersistence:
                     'volume': footprint['volume'],
                     'levels': json.dumps(footprint['levels']),
                 },
-                at=int(footprint['ts'].timestamp() * 1000000)
+                at=self._to_nanos(footprint['ts'])
             )
 
     def fetch_tick_data(self, symbol: str, from_date: str, to_date: str) -> List[Dict]:
@@ -326,10 +343,13 @@ class QuestDBPersistence:
 
     def save_tick_data(self, data: Dict):
         with Sender.from_conf(self.conf) as sender:
-
-            insertion_time = data.get('insertion_time')
-            if isinstance(insertion_time, datetime):
-                insertion_time = int(insertion_time.timestamp() * 1_000_000)
+            # Ensure all numeric types are correctly cast
+            for key in ['ltq', 'oi', 'vtt', 'bid_qty_1', 'ask_qty_1']:
+                if data.get(key) is not None:
+                    try:
+                        data[key] = int(data[key])
+                    except (ValueError, TypeError):
+                        data[key] = None # Or handle as an error
 
             sender.row(
                 'tick_data',
@@ -360,7 +380,18 @@ class QuestDBPersistence:
                     'high': data.get('high'),
                     'low': data.get('low'),
                     'close': data.get('close'),
-                    'insertion_time': insertion_time
+                    'insertion_time': self._to_nanos(data.get('insertion_time'))
                 },
-                at=TimestampNanos( data['timestamp'] if len(str(data['timestamp']))>13 else data['timestamp']*1000 ) #@FIXME... CHECK ..TS IS CORRECT 
+                at=self._to_nanos(data['timestamp'])
             )
+
+    def get_all_symbols(self) -> List[str]:
+        """
+        Fetches all unique instrument_key symbols from the tick_data table.
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                query = "SELECT DISTINCT instrument_key FROM tick_data;"
+                cur.execute(query)
+                rows = cur.fetchall()
+                return [row[0] for row in rows]
