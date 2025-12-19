@@ -1,0 +1,170 @@
+# Database Documentation
+
+This document provides an overview of the databases and tables used in the application.
+
+## QuestDB
+
+QuestDB is the primary database used for storing all time-series data related to trading, including market data, trades, and signals. It is a high-performance, open-source time-series database designed for real-time analytics.
+
+### Tables
+
+#### `levels`
+
+* **Purpose**: Stores significant price levels identified by the trading strategy.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `price`: The price level.
+    * `side`: The side of the level (e.g., 'buy' or 'sell').
+    * `created_ts`: The timestamp when the level was created.
+    * `last_used_ts`: The timestamp when the level was last used.
+
+#### `open_trades`
+
+* **Purpose**: Stores information about currently open trades.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `side`: The side of the trade (e.g., 'buy' or 'sell').
+    * `entry_price`: The price at which the trade was entered.
+    * `entry_ts`: The timestamp when the trade was entered.
+    * `stop_price`: The stop-loss price for the trade.
+    * `tp_price`: The take-profit price for the trade.
+    * `status`: The current status of the trade (e.g., 'OPEN').
+
+#### `closed_trades`
+
+* **Purpose**: Stores information about trades that have been closed.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `side`: The side of the trade (e.g., 'buy' or 'sell').
+    * `entry_price`: The price at which the trade was entered.
+    * `entry_ts`: The timestamp when the trade was entered.
+    * `stop_price`: The stop-loss price for the trade.
+    * `tp_price`: The take-profit price for the trade.
+    * `exit_price`: The price at which the trade was exited.
+    * `exit_ts`: The timestamp when the trade was exited.
+    * `reason`: The reason for closing the trade.
+    * `pnl`: The profit or loss from the trade.
+    * `status`: The final status of the trade (e.g., 'CLOSED').
+
+#### `symbol_state`
+
+* **Purpose**: Stores the last known state of a symbol, such as the timestamp of the last processed candle.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `last_candle_ts`: The timestamp of the last processed candle.
+
+#### `context_candles_15m`
+
+* **Purpose**: Stores 15-minute candle data for context analysis.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `ts`: The timestamp of the candle.
+    * `open`: The opening price of the candle.
+    * `high`: The highest price of the candle.
+    * `low`: The lowest price of the candle.
+    * `close`: The closing price of the candle.
+    * `volume`: The trading volume of the candle.
+
+#### `context_candles_60m`
+
+* **Purpose**: Stores 60-minute candle data for context analysis.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `ts`: The timestamp of the candle.
+    * `open`: The opening price of the candle.
+    * `high`: The highest price of the candle.
+    * `low`: The lowest price of the candle.
+    * `close`: The closing price of the candle.
+    * `volume`: The trading volume of the candle.
+
+#### `ticks`
+
+* **Purpose**: Stores tick-by-tick market data.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `ts`: The timestamp of the tick.
+    * `ltp`: The last traded price.
+    * `volume`: The volume of the tick.
+    * `total_buy_qty`: The total buy quantity.
+    * `total_sell_qty`: The total sell quantity.
+
+#### `footprints`
+
+* **Purpose**: Stores footprint chart data.
+* **Columns**:
+    * `symbol`: The trading symbol.
+    * `ts`: The timestamp of the footprint.
+    * `open`: The opening price of the footprint.
+    * `high`: The highest price of the footprint.
+    * `low`: The lowest price of the footprint.
+    * `close`: The closing price of the footprint.
+    * `volume`: The trading volume of the footprint.
+    * `levels`: A JSON string representing the price levels within the footprint.
+
+#### `tick_data`
+* **Purpose**: Stores detailed tick data from the market feed.
+* **Columns**:
+    * `timestamp`: The timestamp of the tick.
+    * `instrument_key`: The instrument key for the symbol.
+    * `feed_type`: The type of feed (e.g., 'ltp', 'full').
+    * `ltp`: Last traded price.
+    * `ltq`: Last traded quantity.
+    * `cp`: Close price.
+    * `oi`: Open interest.
+    * `atp`: Average traded price.
+    * `vtt`: Volume traded today.
+    * `tbq`: Total buy quantity.
+    * `tsq`: Total sell quantity.
+    * `delta`: Option delta.
+    * `theta`: Option theta.
+    * `gamma`: Option gamma.
+    * `vega`: Option vega.
+    * `rho`: Option rho.
+    * `iv`: Implied volatility.
+    * `bid_price_1`: Best bid price.
+    * `bid_qty_1`: Best bid quantity.
+    * `ask_price_1`: Best ask price.
+    * `ask_qty_1`: Best ask quantity.
+    * `open`: Open price for the day.
+    * `high`: High price for the day.
+    * `low`: Low price for the day.
+    * `close`: Close price for the day.
+    * `insertion_time`: The timestamp when the data was inserted.
+
+#### `signals`
+* **Purpose**: Stores trading signals generated by the strategies.
+* **Columns**:
+    * `strategy_id`: The ID of the strategy that generated the signal.
+    * `symbol`: The trading symbol.
+    * `side`: The side of the signal (e.g., 'buy', 'sell').
+    * `price`: The price at which the signal was generated.
+    * `timestamp`: The timestamp of the signal.
+
+#### `paper_trades`
+* **Purpose**: Stores paper trades for backtesting and simulation.
+* **Columns**:
+    * `strategy_id`: The ID of the strategy that generated the trade.
+    * `symbol`: The trading symbol.
+    * `side`: The side of the trade (e.g., 'buy', 'sell').
+    * `entry_price`: The entry price of the trade.
+    * `exit_price`: The exit price of the trade.
+    * `entry_ts`: The entry timestamp of the trade.
+    * `exit_ts`: The exit timestamp of the trade.
+    * `pnl`: The profit or loss from the trade.
+    * `status`: The status of the trade (e.g., 'OPEN', 'CLOSED').
+
+## MongoDB
+
+MongoDB is included in the project's dependencies and is referenced in several utility scripts. However, it does not appear to be actively used in the core application logic for real-time data processing or trading. It is likely a legacy component from a previous version of the application.
+
+The following scripts contain references to `pymongo`:
+
+* `utils/analyze_results.py`
+* `utils/summarize_backtest.py`
+* `trading_core/persistence.py`
+* `scripts/debug_counts.py`
+* `scripts/rehydrate_history.py`
+* `scripts/test_strategy_today.py`
+* `scripts/migrate_to_questdb.py`
+* `scripts/inspect_mongo_schema.py`
+* `data_handling/h1_aggregator.py`
