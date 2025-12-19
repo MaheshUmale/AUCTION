@@ -22,6 +22,7 @@ import os
 # DATABASE CONFIGURATION
 # -------------------------
 MONGO_URI = "mongodb://localhost:27017"
+DUCKDB_PATH = "trading_data.duckdb" # Use ":memory:" for in-memory database
 DB_NAME = "auction_trading"
 # For H1 context, we can keep the prefix or just use unified naming
 H1_COLLECTION_PREFIX = "context_candles_"  # Suffix will be "{minutes}m"

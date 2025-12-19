@@ -3,6 +3,7 @@
 import sys
 import os
 from datetime import datetime, timedelta
+import pandas as pd
 
 # Add project root to path to allow imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -11,7 +12,7 @@ from pymongo import MongoClient
 import logging
 
 # Local imports
-from trading_core.persistence import QuestDBPersistence
+from trading_core.persistence import DuckDBPersistence
 import config
 
 # Configure logging
@@ -21,13 +22,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 MONGO_URI = config.MONGO_URI
 MONGO_DB_NAME = "upstox_strategy_db"
 TICK_COLLECTION_NAME = "tick_data"
-
-QUESTDB_DB_NAME = config.DB_NAME
+DB_PATH = config.DUCKDB_PATH
 
 def parse_mongo_tick(mongo_doc):
     """
     Parses a tick document from MongoDB and transforms it into the format
-    expected by QuestDBPersistence.save_market_data.
+    expected by DuckDBPersistence.
     """
     try:
         instrument_key = mongo_doc.get("instrumentKey")
@@ -35,21 +35,16 @@ def parse_mongo_tick(mongo_doc):
         market_ff = full_feed.get("marketFF", {})
         ltpc = market_ff.get("ltpc", {})
         market_level = market_ff.get("marketLevel", {})
-
-        # Handle cases where ohlc data might be missing or empty
         ohlc_list = market_ff.get("marketOHLC", {}).get("ohlc", [])
         ohlc_data = ohlc_list[0] if ohlc_list else {}
-
         bid_ask_quote = market_level.get("bidAskQuote", [{}])
 
-        # Validate essential fields
         if not instrument_key or not ltpc.get("ltt"):
             return None
 
         timestamp_ms = int(ltpc.get("ltt"))
         insertion_time_dt = mongo_doc.get("_insertion_time")
 
-        # Basic data mapping
         data = {
             'timestamp': datetime.fromtimestamp(timestamp_ms / 1000.0),
             'instrument_key': instrument_key,
@@ -61,17 +56,15 @@ def parse_mongo_tick(mongo_doc):
             'vtt': int(market_ff.get('vtt')) if market_ff.get('vtt') is not None else None,
             'tbq': float(market_ff.get('tbq')) if market_ff.get('tbq') is not None else None,
             'tsq': float(market_ff.get('tsq')) if market_ff.get('tsq') is not None else None,
-            'oi': None,
-            'atp': None,
-            'delta': None, 'theta': None, 'gamma': None, 'vega': None, 'rho': None, 'iv': None,
+            'oi': None, 'atp': None, 'delta': None, 'theta': None, 'gamma': None, 'vega': None, 'rho': None, 'iv': None,
             'open': float(ohlc_data.get('open')) if ohlc_data.get('open') is not None else None,
             'high': float(ohlc_data.get('high')) if ohlc_data.get('high') is not None else None,
             'low': float(ohlc_data.get('low')) if ohlc_data.get('low') is not None else None,
             'close': float(ohlc_data.get('close')) if ohlc_data.get('close') is not None else None,
             'insertion_time': insertion_time_dt,
+            'processed_time': datetime.now()
         }
 
-        # Market depth (Level 1)
         if bid_ask_quote and len(bid_ask_quote) > 0:
             level1 = bid_ask_quote[0]
             data.update({
@@ -81,24 +74,20 @@ def parse_mongo_tick(mongo_doc):
                 'ask_qty_1': int(level1.get('askQ')) if level1.get('askQ') is not None else None,
             })
         else:
-             data.update({
-                'bid_price_1': None, 'bid_qty_1': None,
-                'ask_price_1': None, 'ask_qty_1': None
-            })
+             data.update({'bid_price_1': None, 'bid_qty_1': None, 'ask_price_1': None, 'ask_qty_1': None})
 
         return data
     except (ValueError, TypeError, IndexError) as e:
         logging.error(f"Error parsing document with _id {mongo_doc.get('_id')}: {e}")
         return None
 
-def load_data_from_mongo_to_questdb():
+def load_data_from_mongo_to_duckdb():
     """
     Main function to connect to MongoDB, fetch recent tick data,
-    and load it into QuestDB.
+    and load it into DuckDB.
     """
-    logging.info("Starting data load from MongoDB to QuestDB...")
+    logging.info("Starting data load from MongoDB to DuckDB...")
 
-    # --- Connect to Databases ---
     try:
         mongo_client = MongoClient(MONGO_URI)
         mongo_db = mongo_client[MONGO_DB_NAME]
@@ -109,13 +98,12 @@ def load_data_from_mongo_to_questdb():
         return
 
     try:
-        qdb_persistence = QuestDBPersistence(db_name=QUESTDB_DB_NAME)
-        logging.info("Successfully connected to QuestDB.")
+        duckdb_persistence = DuckDBPersistence(db_path=DB_PATH)
+        logging.info(f"Successfully connected to DuckDB at {DB_PATH}.")
     except Exception as e:
-        logging.error(f"Failed to connect to QuestDB: {e}")
+        logging.error(f"Failed to connect to DuckDB: {e}")
         return
 
-    # --- Fetch Data and Load ---
     try:
         logging.info("Fetching distinct instrument keys from MongoDB...")
         symbols = tick_collection.distinct("instrumentKey")
@@ -123,34 +111,24 @@ def load_data_from_mongo_to_questdb():
 
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=2)
-
         total_docs_processed = 0
+        all_docs = []
 
         for i, symbol in enumerate(symbols):
             logging.info(f"Processing symbol {i+1}/{len(symbols)}: {symbol}")
-
-            query = {
-                "instrumentKey": symbol,
-                "_insertion_time": {
-                    "$gte": start_date,
-                    "$lt": end_date
-                }
-            }
-
+            query = {"instrumentKey": symbol, "_insertion_time": {"$gte": start_date, "$lt": end_date}}
             cursor = tick_collection.find(query)
-            docs_for_symbol = 0
+
             for doc in cursor:
                 parsed_data = parse_mongo_tick(doc)
                 if parsed_data:
-                    try:
-                        qdb_persistence.save_market_data(parsed_data)
-                        docs_for_symbol += 1
-                    except Exception as e:
-                        logging.error(f"Failed to save data for {symbol} to QuestDB: {e}")
-                        logging.debug(f"Problematic data: {parsed_data}")
+                    all_docs.append(parsed_data)
 
-            logging.info(f"Processed {docs_for_symbol} documents for {symbol}.")
-            total_docs_processed += docs_for_symbol
+        if all_docs:
+            logging.info(f"Collected {len(all_docs)} documents. Starting bulk insert into DuckDB...")
+            duckdb_persistence.save_market_data_batch(all_docs)
+            duckdb_persistence.flush_tick_buffer()
+            total_docs_processed = len(all_docs)
 
         logging.info(f"\n--- Data Load Complete ---")
         logging.info(f"Total documents processed: {total_docs_processed}")
@@ -159,7 +137,8 @@ def load_data_from_mongo_to_questdb():
         logging.error(f"An error occurred during the data load process: {e}")
     finally:
         mongo_client.close()
-        logging.info("MongoDB connection closed.")
+        duckdb_persistence.shutdown()
+        logging.info("MongoDB and DuckDB connections closed.")
 
 if __name__ == "__main__":
-    load_data_from_mongo_to_questdb()
+    load_data_from_mongo_to_duckdb()
