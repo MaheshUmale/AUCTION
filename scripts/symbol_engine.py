@@ -1,7 +1,7 @@
-from inference import OrderFlowInferer
-from footprint import FootprintBuilder
-from dom import DOMBook
-from mongo import store_footprint, store_dom
+from strategy.footprint_engine import FootprintBuilder
+from scripts.inference import OrderFlowInferer
+from scripts.dom import DOMBook
+from scripts.mongo import store_footprint, store_dom
 from config import FOOTPRINT_TF_SEC, TICK_SIZE
 
 class SymbolEngine:

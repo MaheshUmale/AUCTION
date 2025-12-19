@@ -1,4 +1,4 @@
-from symbol_engine import SymbolEngine
+from scripts.symbol_engine import SymbolEngine
 
 class LiveMarketRouter:
     def __init__(self):
