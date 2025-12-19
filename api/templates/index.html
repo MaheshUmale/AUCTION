@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trading Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('read_root') }}">Trading Dashboard</a>
+            <div class="collapse navbar-collapse">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('query_get') }}">Query UI</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('renko_get') }}">Renko Chart</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('trades_get') }}">Trade Viewer</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <h1>Real-Time Trading Dashboard</h1>
+        <div id="chart" style="width: 100%; height: 600px;"></div>
+    </div>
+
+    <script>
+        const chartContainer = document.getElementById('chart');
+        const chart = LightweightCharts.createChart(chartContainer, {
+            width: chartContainer.clientWidth,
+            height: 600,
+            layout: {
+                backgroundColor: '#ffffff',
+                textColor: 'rgba(33, 56, 77, 1)',
+            },
+            grid: {
+                vertLines: { color: 'rgba(197, 203, 206, 0.5)' },
+                horzLines: { color: 'rgba(197, 203, 206, 0.5)' },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: 'rgba(197, 203, 206, 0.8)' },
+            timeScale: { borderColor: 'rgba(197, 203, 206, 0.8)' },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+            upColor: 'rgba(0, 150, 136, 1)',
+            downColor: 'rgba(255, 82, 82, 1)',
+            borderDownColor: 'rgba(255, 82, 82, 1)',
+            borderUpColor: 'rgba(0, 150, 136, 1)',
+            wickDownColor: 'rgba(255, 82, 82, 1)',
+            wickUpColor: 'rgba(0, 150, 136, 1)',
+        });
+
+        const ws = new WebSocket("ws://" + window.location.host + "/ws");
+
+        ws.onopen = function(event) {
+            console.log("WebSocket connection established.");
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'ohlc') {
+                const candleData = {
+                    time: data.ts / 1000,
+                    open: data.open,
+                    high: data.high,
+                    low: data.low,
+                    close: data.close,
+                };
+                candleSeries.update(candleData);
+            }
+        };
+
+        ws.onerror = function(event) {
+            console.error("WebSocket error observed:", event);
+        };
+    </script>
+</body>
+</html>
