@@ -76,6 +76,7 @@ class QuestDBPersistence:
             instrument_key SYMBOL CAPACITY 512 CACHE,
             feed_type SYMBOL CAPACITY 256 CACHE,
             ltp DOUBLE,
+            ltt LONG,
             ltq LONG,
             cp DOUBLE,
             oi LONG,
@@ -390,6 +391,7 @@ class QuestDBPersistence:
                 },
                 columns={
                     'ltp': data.get('ltp'),
+                    'ltt': data.get('ltt'),
                     'ltq': data.get('ltq'),
                     'cp': data.get('cp'),
                     'oi': data.get('oi'),

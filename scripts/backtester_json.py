@@ -55,6 +55,7 @@ def run_backtest(symbol: str, file_path: str):
                         "feed_type": "TICK",
                         "timestamp": tick.ts,
                         "ltp": tick.ltp,
+                        "ltt": tick.ts,
                         "vtt": tick.volume,
                         "tbq": tick.total_buy_qty,
                         "tsq": tick.total_sell_qty,
@@ -75,6 +76,19 @@ def run_backtest(symbol: str, file_path: str):
                             volume=int(ohlc.get("vol", 0)),
                             ts=int(ohlc["ts"]),
                         )
+
+                        market_data = {
+                            "instrument_key": symbol,
+                            "feed_type": "CANDLE_I1",
+                            "timestamp": candle.ts,
+                            "open": candle.open,
+                            "high": candle.high,
+                            "low": candle.low,
+                            "close": candle.close,
+                            "vtt": candle.volume,
+                            "insertion_time": candle.ts
+                        }
+                        persistence.save_market_data(market_data)
                         engine.on_candle_close(candle)
 
             except (ValueError, TypeError) as e:
