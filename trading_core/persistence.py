@@ -98,7 +98,8 @@ class QuestDBPersistence:
             high DOUBLE,
             low DOUBLE,
             close DOUBLE,
-            insertion_time TIMESTAMP
+            insertion_time TIMESTAMP,
+            processed_time TIMESTAMP
         ) timestamp(timestamp) PARTITION BY DAY WAL
         WITH maxUncommittedRows=500000, o3MaxLag=600000000us;
         """)
@@ -115,6 +116,7 @@ class QuestDBPersistence:
                 last_used_ts TIMESTAMP
             ) timestamp(created_ts);
             """)
+            cur.execute("DROP TABLE IF EXISTS open_trades;")
             cur.execute("""
             CREATE TABLE IF NOT EXISTS open_trades (
                 symbol SYMBOL,
@@ -124,7 +126,7 @@ class QuestDBPersistence:
                 stop_price DOUBLE,
                 tp_price DOUBLE,
                 status SYMBOL
-            ) timestamp(entry_ts);
+            ) timestamp(entry_ts) PARTITION BY DAY WAL;
             """)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS closed_trades (
@@ -413,7 +415,8 @@ class QuestDBPersistence:
                     'high': data.get('high'),
                     'low': data.get('low'),
                     'close': data.get('close'),
-                    'insertion_time': self._to_nanos(data.get('insertion_time'))
+                    'insertion_time': self._to_nanos(data.get('insertion_time')),
+                    'processed_time': self._to_nanos(data.get('processed_time'))
                 },
                 at=self._to_nanos(data['timestamp'])
             )

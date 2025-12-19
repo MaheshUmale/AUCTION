@@ -59,7 +59,8 @@ def run_backtest(symbol: str, file_path: str):
                         "vtt": tick.volume,
                         "tbq": tick.total_buy_qty,
                         "tsq": tick.total_sell_qty,
-                        "insertion_time": tick.ts
+                        "insertion_time": tick.ts,
+                        "processed_time": tick.ts
                     }
                     persistence.save_market_data(market_data)
                     engine.on_tick(tick)
@@ -86,7 +87,8 @@ def run_backtest(symbol: str, file_path: str):
                             "low": candle.low,
                             "close": candle.close,
                             "vtt": candle.volume,
-                            "insertion_time": candle.ts
+                            "insertion_time": candle.ts,
+                            "processed_time": candle.ts
                         }
                         persistence.save_market_data(market_data)
                         engine.on_candle_close(candle)
