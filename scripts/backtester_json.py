@@ -16,11 +16,14 @@ def run_backtest(symbol: str, file_path: str):
 
     # 1. Initialize Engine and Persistence
     persistence = QuestDBPersistence(db_name="auction_trading_backtest")
-    engine = LiveAuctionEngine(config={
-        "simulation_mode": True,
-        "bias_timeframe_minutes": config.BIAS_TIMEFRAME_MINUTES,
-        "db_name": "auction_trading_backtest"
-    })
+    engine = LiveAuctionEngine(
+        config={
+            "simulation_mode": True,
+            "bias_timeframe_minutes": config.BIAS_TIMEFRAME_MINUTES,
+            "db_name": "auction_trading_backtest"
+        },
+        persistence=persistence
+    )
     engine.loadFromDb()
 
     try:
