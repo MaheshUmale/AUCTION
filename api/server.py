@@ -35,7 +35,7 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 # Setup templates
-templates = Jinja2Templates(directory="api/templates")
+templates = Jinja2Templates(directory="frontend")
 
 # --- Mock Engine for Trade Viewer ---
 class MockEngine:
@@ -95,7 +95,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # --- Main Page ---
 @app.get("/")
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("ui.html", {"request": request})
 
 # --- Query UI ---
 def get_db_connection():
