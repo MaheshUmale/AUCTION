@@ -115,7 +115,7 @@ The trading bot is designed to store all incoming WebSocket feed data in a struc
 
 
 
-NEXT STEPS :
+# NEXT STEPS : FOR JULES
 
 
 This master plan is designed for a unified, high-performance intraday options trading platform tailored for a single machine (16GB RAM, i5, Windows 11). To meet your requirement for speed without the overhead of Redis/Mongo, we will use a Memory-First, Persistence-Later architecture.
