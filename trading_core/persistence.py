@@ -136,6 +136,28 @@ class QuestDBPersistence:
                 ) timestamp(ts);
                 """)
                 cur.execute("""
+                CREATE TABLE IF NOT EXISTS signals (
+                    strategy_id SYMBOL,
+                    symbol SYMBOL,
+                    side SYMBOL,
+                    price DOUBLE,
+                    timestamp TIMESTAMP
+                ) timestamp(timestamp);
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS paper_trades (
+                    strategy_id SYMBOL,
+                    symbol SYMBOL,
+                    side SYMBOL,
+                    entry_price DOUBLE,
+                    exit_price DOUBLE,
+                    entry_ts TIMESTAMP,
+                    exit_ts TIMESTAMP,
+                    pnl DOUBLE,
+                    status SYMBOL
+                ) timestamp(entry_ts);
+                """)
+                cur.execute("""
                 CREATE TABLE IF NOT EXISTS ticks (
                     symbol SYMBOL,
                     ts TIMESTAMP,
@@ -341,7 +363,7 @@ class QuestDBPersistence:
                 rows = cur.fetchall()
                 return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
 
-    def save_tick_data(self, data: Dict):
+    def save_market_data(self, data: Dict):
         with Sender.from_conf(self.conf) as sender:
             # Ensure all numeric types are correctly cast
             for key in ['ltq', 'oi', 'vtt', 'bid_qty_1', 'ask_qty_1']:
@@ -395,3 +417,20 @@ class QuestDBPersistence:
                 cur.execute(query)
                 rows = cur.fetchall()
                 return [row[0] for row in rows]
+
+    def get_recent_candles(self, symbol: str, limit: int) -> List[Dict]:
+        """
+        Fetches the most recent N 1-minute candles for a given symbol.
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                query = """
+                SELECT timestamp as ts, open, high, low, close, vtt as volume
+                FROM tick_data
+                WHERE instrument_key = %s AND feed_type = 'CANDLE_I1'
+                ORDER BY timestamp DESC
+                LIMIT %s;
+                """
+                cur.execute(query, (symbol, limit))
+                rows = cur.fetchall()
+                return [dict(zip([column[0] for column in cur.description], row)) for row in rows]
