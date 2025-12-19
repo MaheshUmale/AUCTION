@@ -6,6 +6,7 @@ import os
 
 
 from trading_core.stage8_engine import LiveAuctionEngine
+from trading_core.persistence import QuestDBPersistence
 import config
 
 # --- Strategy Process ---
@@ -20,7 +21,10 @@ class StrategyProcess(multiprocessing.Process):
         """The main entry point for a strategy process."""
         print(f"Starting strategy process for {self.strategy_config['name']}...")
 
-        engine = LiveAuctionEngine(self.strategy_config)
+        db_name = self.strategy_config.get("db_name", "auction_trading")
+        persistence = QuestDBPersistence(db_name=db_name)
+
+        engine = LiveAuctionEngine(self.strategy_config, persistence)
         engine.start_consuming(config.ZMQ_PUB_URL)
 
 # --- Strategy Manager ---

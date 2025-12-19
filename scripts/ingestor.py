@@ -5,6 +5,7 @@ import time
 import sys
 import os
 import logging
+from collections import deque
 
 import config
 from trading_core.persistence import QuestDBPersistence
@@ -20,9 +21,7 @@ logger = logging.getLogger(__name__)
 def on_message_handler(data, zmq_socket):
     """Callback to handle incoming WebSocket messages and publish them."""
     try:
-        logger.info(f"Received from WebSocket: {data}")
         zmq_socket.send_multipart([config.ZMQ_TOPIC.encode('utf-8'), json.dumps(data).encode('utf-8')])
-        logger.info("Published to ZeroMQ.")
     except Exception as e:
         logger.error(f"Error publishing to ZeroMQ: {e}")
 
@@ -56,32 +55,60 @@ def start_websocket_publisher(access_token, instrument_keys, zmq_pub_url):
 # --- QuestDB Writer Thread ---
 
 def start_questdb_writer(zmq_sub_url):
-    """Subscribes to the ZeroMQ feed and writes data to QuestDB."""
-    logger.info("Starting QuestDB writer...")
-    context = zmq.Context()
-    sub_socket = context.socket(zmq.SUB)
-    sub_socket.connect(zmq_sub_url)
-    sub_socket.setsockopt(zmq.SUBSCRIBE, config.ZMQ_TOPIC.encode('utf-8'))
+    """
+    Subscribes to the ZeroMQ feed, buffers messages in a deque, and writes
+    them to QuestDB in batches.
+    """
+    logger.info("Starting QuestDB writer with batching...")
 
-    persistence = QuestDBPersistence()
+    message_queue = deque()
+    lock = threading.Lock()
+    BATCH_SIZE = 100
+    FLUSH_INTERVAL = 5  # seconds
 
-    def run_writer():
+    def zmq_listener_thread():
+        """Listens to ZMQ and adds messages to the thread-safe deque."""
+        context = zmq.Context()
+        sub_socket = context.socket(zmq.SUB)
+        sub_socket.connect(zmq_sub_url)
+        sub_socket.setsockopt(zmq.SUBSCRIBE, config.ZMQ_TOPIC.encode('utf-8'))
         while True:
             try:
                 topic, message = sub_socket.recv_multipart()
                 data = json.loads(message.decode('utf-8'))
-
-                feeds = data.get("feeds", {})
-                for symbol, feed in feeds.items():
-                    save_feed_data(persistence, symbol, feed)
-                    logger.info(f"Persisted data for {symbol}")
-
+                with lock:
+                    message_queue.append(data)
             except Exception as e:
-                logger.error(f"Error in QuestDB writer: {e}")
+                logger.error(f"Error in ZMQ listener thread: {e}")
 
-    t = threading.Thread(target=run_writer, daemon=True)
-    t.start()
-    logger.info("QuestDB writer thread started.")
+    def db_persister_thread():
+        """Persists messages from the deque to QuestDB in batches."""
+        persistence = QuestDBPersistence()
+        while True:
+            batch_to_persist = []
+            with lock:
+                while len(message_queue) > 0 and len(batch_to_persist) < BATCH_SIZE:
+                    batch_to_persist.append(message_queue.popleft())
+
+            if batch_to_persist:
+                try:
+                    for msg_data in batch_to_persist:
+                        feeds = msg_data.get("feeds", {})
+                        for symbol, feed in feeds.items():
+                            save_feed_data(persistence, symbol, feed)
+                    logger.info(f"Persisted batch of {len(batch_to_persist)} messages.")
+                except Exception as e:
+                    logger.error(f"Error persisting batch to QuestDB: {e}")
+
+            # Sleep to prevent busy-waiting
+            time.sleep(FLUSH_INTERVAL if not batch_to_persist else 0.1)
+
+    # Start the listener and persister threads
+    listener = threading.Thread(target=zmq_listener_thread, daemon=True)
+    persister = threading.Thread(target=db_persister_thread, daemon=True)
+    listener.start()
+    persister.start()
+    logger.info("QuestDB writer threads (listener and persister) started.")
 
 
 # --- Main ---

@@ -105,7 +105,7 @@ class LiveAuctionEngine:
     The LiveAuctionEngine is the core of the trading bot. It integrates market
     data, trading logic, and persistence to make real-time trading decisions.
     """
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, persistence: QuestDBPersistence):
         self.config = config
         self.simulation_mode = config.get("simulation_mode", False)
         self.trade_engine = TradeEngine()
@@ -113,7 +113,7 @@ class LiveAuctionEngine:
         self.last_candle_ts: Dict[str, int] = {}
         self.last_candles: Dict[str, Candle] = {}
         
-        self.persistence = QuestDBPersistence(db_name=config.get("db_name", "auction_trading"))
+        self.persistence = persistence
         self.open_trades = {}
         self.loadFromDb()
 
@@ -409,7 +409,7 @@ class LiveAuctionEngine:
 
         # ---- OPEN TRADES ----
         for doc in self.persistence.load_open_trades():
-            if doc["entry_ts"] < today_start:
+            if doc["entry_ts"].timestamp() * 1000 < today_start:
                 open_skipped += 1
                 continue # Skip old trades
 
@@ -430,7 +430,7 @@ class LiveAuctionEngine:
 
         # ---- CLOSED TRADES ----
         for doc in self.persistence.load_closed_trades():
-            if doc["entry_ts"] < today_start:
+            if not doc["entry_ts"] or doc["entry_ts"].timestamp() * 1000 < today_start:
                 closed_skipped += 1
                 continue
 
@@ -661,12 +661,10 @@ class LiveAuctionEngine:
         self.h1_aggregator.on_1min_candle(candle)
 
         last_ts = self.persistence.get_last_candle_ts(candle.symbol)
-        #convert last_ts datetime.datetime to int
-        if last_ts is not None and candle.ts is not None and int(candle.ts) <= int(last_ts.timestamp())*1000000:
-            print(f"before return  CHECK VALUUES last_ts = {last_ts}  = {int(last_ts.timestamp())*1000000}  and {candle.ts}" )
-        
-            return  # already processed
-        print(f" after return CHECK VALUUES last_ts = {last_ts}  = {int(last_ts.timestamp())*1000000}  and {candle.ts}" )
+        if last_ts is not None and candle.ts is not None:
+            # Convert last_ts (datetime) to milliseconds to compare with candle.ts
+            if int(candle.ts) <= int(last_ts.timestamp() * 1000):
+                return  # already processed
        
         self.persistence.update_last_candle_ts(candle.symbol, candle.ts)
 

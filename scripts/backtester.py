@@ -16,9 +16,12 @@ def run_backtest(symbol: str, from_date: str, to_date: str):
     # 1. Initialize Engine and Persistence
     persistence = QuestDBPersistence(db_name="auction_trading_backtest")
     engine = LiveAuctionEngine(
-        simulation_mode=True,
-        bias_timeframe_minutes=config.BIAS_TIMEFRAME_MINUTES,
-        persistence_db_name="auction_trading_backtest"
+        config={
+            "simulation_mode": True,
+            "bias_timeframe_minutes": config.BIAS_TIMEFRAME_MINUTES,
+            "persistence_db_name": "auction_trading_backtest"
+        },
+        persistence=persistence
     )
     engine.loadFromDb()
     router = LiveMarketRouter(engine)
