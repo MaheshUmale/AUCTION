@@ -47,7 +47,12 @@
 
         const ws = new WebSocket("ws://localhost:8000/ws");
 
+        ws.onopen = function(event) {
+            console.log("WebSocket connection established.");
+        };
+
         ws.onmessage = function(event) {
+            console.log("Received data:", event.data);
             const data = JSON.parse(event.data);
             const feeds = data.feeds;
             for (const symbol in feeds) {
@@ -57,21 +62,19 @@
                     const ohlcList = market.marketOHLC.ohlc;
                     ohlcList.forEach(ohlc => {
                         if (ohlc.interval === 'I1') {
-                            candleSeries.update({
-                                time: ohlc.ts,
+                            const candleData = {
+                                time: ohlc.ts / 1000, // Convert ms to seconds
                                 open: ohlc.open,
                                 high: ohlc.high,
                                 low: ohlc.low,
                                 close: ohlc.close,
-                            });
+                            };
+                            console.log("Updating chart with:", candleData);
+                            candleSeries.update(candleData);
                         }
                     });
                 }
             }
-        };
-
-        ws.onopen = function(event) {
-            console.log("WebSocket connection established.");
         };
 
         ws.onerror = function(event) {

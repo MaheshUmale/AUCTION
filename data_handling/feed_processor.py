@@ -1,5 +1,8 @@
 from datetime import datetime
 from trading_core.persistence import QuestDBPersistence
+import logging
+
+logger = logging.getLogger(__name__)
 
 def save_feed_data(persistence: QuestDBPersistence, symbol: str, feed: dict):
     """
@@ -53,7 +56,7 @@ def save_feed_data(persistence: QuestDBPersistence, symbol: str, feed: dict):
         try:
             persistence.save_market_data(record)
         except Exception as e:
-            print(f"Error saving tick data: {e}")
+            logger.error(f"Error saving tick data: {e}")
 
     # Process Candle Data
     ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
@@ -73,4 +76,4 @@ def save_feed_data(persistence: QuestDBPersistence, symbol: str, feed: dict):
             try:
                 persistence.save_market_data(candle_record)
             except Exception as e:
-                print(f"Error saving candle data: {e}")
+                logger.error(f"Error saving candle data: {e}")
