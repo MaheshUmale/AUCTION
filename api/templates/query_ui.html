@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuestDB Query UI</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .dataframe {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .dataframe th, .dataframe td {
+        border: 1px solid #ddd;
+        padding: 8px;
+    }
+    .dataframe th {
+        background-color: #f2f2f2;
+        text-align: left;
+    }
+  </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('read_root') }}">Trading Dashboard</a>
+            <div class="collapse navbar-collapse">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('query_get') }}">Query UI</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('renko_get') }}">Renko Chart</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('trades_get') }}">Trade Viewer</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+  <div class="container mt-4">
+    <h1 class="mb-4">QuestDB Query UI</h1>
+
+    <form method="post" action="{{ url_for('query_post') }}">
+      <div class="mb-3">
+        <label for="query" class="form-label">SQL Query</label>
+        <textarea class="form-control" id="query" name="query" rows="5" required>{{ query }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Execute</button>
+    </form>
+
+    {% if error %}
+      <div class="alert alert-danger mt-4" role="alert">
+        <strong>Error:</strong> {{ error }}
+      </div>
+    {% endif %}
+
+    {% if results %}
+      <h2 class="mt-5">Results</h2>
+      <div class="table-responsive">
+        {{ results|safe }}
+      </div>
+    {% endif %}
+
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
