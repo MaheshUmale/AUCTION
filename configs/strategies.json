@@ -1,0 +1,14 @@
+[
+    {
+        "name": "AuctionTheory_Nifty",
+        "symbols": ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"],
+        "strategy_class": "LiveAuctionEngine",
+        "parameters": {
+            "lookback": 120,
+            "tick_size": 0.05,
+            "sma_period": 20,
+            "bias_confirm_candles": 3,
+            "bias_timeframe_minutes": 15
+        }
+    }
+]

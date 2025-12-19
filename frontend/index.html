@@ -1,51 +1,82 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pro Footprint Trader</title>
-  <!-- Premium Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-    rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+    <title>Trading Dashboard</title>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
-
 <body>
+    <h1>Real-Time Trading Dashboard</h1>
+    <div id="chart" style="width: 800px; height: 600px;"></div>
 
-  <!-- Top Navigation / Controls -->
-  <div id="top-bar">
-    <div class="brand">FP CHART</div>
+    <script>
+        const chartContainer = document.getElementById('chart');
+        const chart = LightweightCharts.createChart(chartContainer, {
+            width: 800,
+            height: 600,
+            layout: {
+                backgroundColor: '#ffffff',
+                textColor: 'rgba(33, 56, 77, 1)',
+            },
+            grid: {
+                vertLines: {
+                    color: 'rgba(197, 203, 206, 0.5)',
+                },
+                horzLines: {
+                    color: 'rgba(197, 203, 206, 0.5)',
+                },
+            },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+                borderColor: 'rgba(197, 203, 206, 0.8)',
+            },
+            timeScale: {
+                borderColor: 'rgba(197, 203, 206, 0.8)',
+            },
+        });
 
-    <div class="search-container">
-      <input type="text" id="symbolSearch" placeholder="Search Instrument..." autocomplete="off">
-      <div id="searchResults" class="dropdown-content"></div>
-    </div>
+        const candleSeries = chart.addCandlestickSeries({
+            upColor: 'rgba(0, 150, 136, 1)',
+            downColor: 'rgba(255, 82, 82, 1)',
+            borderDownColor: 'rgba(255, 82, 82, 1)',
+            borderUpColor: 'rgba(0, 150, 136, 1)',
+            wickDownColor: 'rgba(255, 82, 82, 1)',
+            wickUpColor: 'rgba(0, 150, 136, 1)',
+        });
 
-    <!-- Future Controls can go here -->
-  </div>
+        const ws = new WebSocket("ws://localhost:8000/ws");
 
-  <!-- Main Workspace -->
-  <div id="main-container">
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const feeds = data.feeds;
+            for (const symbol in feeds) {
+                const feed = feeds[symbol];
+                const market = feed.fullFeed.marketFF || feed.fullFeed.indexFF;
+                if (market && market.marketOHLC) {
+                    const ohlcList = market.marketOHLC.ohlc;
+                    ohlcList.forEach(ohlc => {
+                        if (ohlc.interval === 'I1') {
+                            candleSeries.update({
+                                time: ohlc.ts,
+                                open: ohlc.open,
+                                high: ohlc.high,
+                                low: ohlc.low,
+                                close: ohlc.close,
+                            });
+                        }
+                    });
+                }
+            }
+        };
 
-    <!-- Footprint Chart Area -->
-    <div id="chart-container">
-      <canvas id="fpCanvas"></canvas>
-      <div id="msgOverlay" class="overlay-message">Select a Symbol</div>
-    </div>
+        ws.onopen = function(event) {
+            console.log("WebSocket connection established.");
+        };
 
-    <!-- DOM / Order Flow Area -->
-    <div id="dom-panel">
-      <div class="panel-header">Depth of Market</div>
-      <canvas id="domCanvas" width="280" height="800"></canvas>
-    </div>
-
-  </div>
-
-  <script src="app.js"></script>
+        ws.onerror = function(event) {
+            console.error("WebSocket error observed:", event);
+        };
+    </script>
 </body>
-
 </html>

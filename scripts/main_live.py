@@ -28,7 +28,7 @@ sys.path.insert(0, project_root)
 from google.protobuf.json_format import MessageToDict
 import MarketDataFeedV3_pb2 as pb
 
-from trading_core.stage8_engine import LiveAuctionEngine, LiveMarketRouter, Monitor
+from trading_core.stage8_engine import LiveAuctionEngine, Monitor
 from ui import trade_viewer
 
 import config

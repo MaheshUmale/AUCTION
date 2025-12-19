@@ -122,3 +122,7 @@ MIN_ENTRY_VOLUME = int(FOOTPRINT_VOL_THRESHOLD * 0.7)
 
 #FlowRate and volume STD Dev
 STD_DEV = 1
+
+# ZeroMQ Configuration
+ZMQ_PUB_URL = "tcp://127.0.0.1:5555"
+ZMQ_TOPIC = "market_data"

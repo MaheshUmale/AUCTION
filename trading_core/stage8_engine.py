@@ -105,23 +105,22 @@ class LiveAuctionEngine:
     The LiveAuctionEngine is the core of the trading bot. It integrates market
     data, trading logic, and persistence to make real-time trading decisions.
     """
-    def __init__(self, simulation_mode: bool = config.DEFAULT_SIMULATION_MODE, bias_timeframe_minutes: int = config.BIAS_TIMEFRAME_MINUTES, persistence_db_name = None):
-        self.simulation_mode = simulation_mode
+    def __init__(self, config: dict):
+        self.config = config
+        self.simulation_mode = config.get("simulation_mode", False)
         self.trade_engine = TradeEngine()
-        # self.V12_tradeEngine = V12TradeEngine()
         self.structure: Dict[str, List[StructureLevel]] = {}
         self.last_candle_ts: Dict[str, int] = {}
         self.last_candles: Dict[str, Candle] = {}
         
-        db_name = persistence_db_name if persistence_db_name else config.DB_NAME
-        self.persistence = QuestDBPersistence(db_name=db_name)
+        self.persistence = QuestDBPersistence(db_name=config.get("db_name", "auction_trading"))
         self.open_trades = {}
         self.loadFromDb()
 
         # The AuctionContext provides the primary market structure analysis.
         self.context_filter = AuctionContext(
-            lookback=120,
-            tick_size=0.05
+            lookback=config.get("parameters", {}).get("lookback", 120),
+            tick_size=config.get("parameters", {}).get("tick_size", 0.05)
         )
 
         # The Stage10AddLogic determines when to add to an existing position.
@@ -162,9 +161,9 @@ class LiveAuctionEngine:
         
         # The H1Aggregator builds a higher-timeframe context to identify the dominant trend.
         self.h1_aggregator = H1Aggregator(
-            sma_period=config.SMA_PERIOD, 
-            bias_confirm_candles=config.BIAS_CONFIRM_CANDLES,
-            timeframe_minutes=bias_timeframe_minutes
+            sma_period=self.config.get("parameters", {}).get("sma_period", 20),
+            bias_confirm_candles=self.config.get("parameters", {}).get("bias_confirm_candles", 3),
+            timeframe_minutes=self.config.get("parameters", {}).get("bias_timeframe_minutes", 60)
         )
 
         # The OrderBookAnalyzer scans Level 2 data for liquidity and imbalances.
@@ -174,7 +173,7 @@ class LiveAuctionEngine:
         self.signal_generator = SignalGenerator()
         
         # The HistoricalDataFetcher retrieves historical data for warming up the engine.
-        self.fetcher = HistoricalDataFetcher(config.ACCESS_TOKEN, self.persistence)
+        self.fetcher = HistoricalDataFetcher(self.config.get("access_token"), self.persistence)
         
         # The FootprintBuilder creates detailed volume footprint charts for micro-level analysis.
         self.footprints: Dict[str, FootprintBuilder] = {}
@@ -183,6 +182,98 @@ class LiveAuctionEngine:
 
         # The RenkoAggregator builds Renko charts from tick data to filter out market noise.
         self.renko_aggregator = RenkoAggregator(on_renko_brick=self.on_renko_brick)
+
+    def start_consuming(self, zmq_sub_url: str):
+        """Subscribes to the ZeroMQ feed and processes incoming market data."""
+        import zmq
+        import json
+
+        context = zmq.Context()
+        sub_socket = context.socket(zmq.SUB)
+        sub_socket.connect(zmq_sub_url)
+        sub_socket.setsockopt(zmq.SUBSCRIBE, config.ZMQ_TOPIC.encode('utf-8'))
+
+        print(f"Strategy {self.config['name']} is consuming from {zmq_sub_url}")
+
+        while True:
+            try:
+                topic, message = sub_socket.recv_multipart()
+                data = json.loads(message.decode('utf-8'))
+
+                feeds = data.get("feeds", {})
+                for symbol, feed in feeds.items():
+                    if symbol not in self.config['symbols']:
+                        continue
+
+                    # Replicate the data parsing logic here
+                    full_feed = feed.get("fullFeed", {})
+                    market = full_feed.get("marketFF") or full_feed.get("indexFF")
+
+                    if not market:
+                        continue
+
+                    # Process Tick data
+                    ltpc = market.get('ltpc')
+                    if ltpc and 'ltp' in ltpc and 'ltt' in ltpc:
+                        tick = Tick(
+                            symbol=symbol,
+                            ltp=ltpc['ltp'],
+                            ts=int(ltpc['ltt']),
+                            volume=market.get('vtt', 0),
+                            total_buy_qty=market.get('tbq', 0),
+                            total_sell_qty=market.get('tsq', 0)
+                        )
+                        self.on_tick(tick)
+
+                        # WARMUP CHECK
+                        if not self.simulation_mode and symbol not in self.h1_aggregator.h1_candles:
+                            try:
+                                self.h1_aggregator.initialize_symbol(symbol)
+                            except Exception as e:
+                                print(f"Warmup failed for {symbol}: {e}")
+
+                        # Update order book and footprint
+                        if market:
+                            self.orderbook.update(symbol, market, tick.ts)
+                            last_vol = self.last_vols.get(symbol, tick.volume)
+                            trade_vol = int(tick.volume) - int(last_vol)
+                            if trade_vol < 0: trade_vol = 0
+                            self.last_vols[symbol] = tick.volume
+                            ltq = int(ltpc.get('ltq', 0))
+                            if trade_vol <= 0 and ltq > 0:
+                                trade_vol = ltq
+                            if trade_vol > 0:
+                                self.update_footprint(symbol, tick.ltp, trade_vol, tick.ts)
+
+                            # Broadcast DOM
+                            if self.broadcaster:
+                                ml = market.get("marketLevel", {})
+                                quotes = ml.get("bidAskQuote", [])
+                                bids, asks = {}, {}
+                                for q in quotes:
+                                    if "bidP" in q and q["bidP"]: bids[str(q["bidP"])] = q.get("bidQ", 0)
+                                    if "askP" in q and q["askP"]: asks[str(q["askP"])] = q.get("askQ", 0)
+
+                                dom_msg = {"type": "dom", "symbol": symbol, "bids": bids, "asks": asks, "ts": tick.ts}
+                                self.broadcaster(symbol, dom_msg)
+
+                    # Process Candle Data
+                    ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
+                    for ohlc in ohlc_list:
+                        if ohlc.get("interval") == "I1":
+                            candle = Candle(
+                                symbol=symbol,
+                                open=float(ohlc["open"]),
+                                high=float(ohlc["high"]),
+                                low=float(ohlc["low"]),
+                                close=float(ohlc["close"]),
+                                volume=int(ohlc.get("vol", 0)),
+                                ts=int(ohlc["ts"]),
+                            )
+                            self.on_candle_close(candle)
+
+            except Exception as e:
+                print(f"Error in strategy consumer: {e}")
 
     def on_renko_brick(self, brick: Candle):
         # This method will be called by the RenkoAggregator when a new brick is formed.
@@ -749,218 +840,8 @@ class LiveAuctionEngine:
 
 
 
-# -------------------------
-# Market Router (Upstox WSS)
-# -------------------------
-
-class LiveMarketRouter:
-    def __init__(self, engine: LiveAuctionEngine):
-        self.engine = engine
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='db_writer')
-
-    def shutdown(self):
-        """Gracefully shuts down the thread pool."""
-        print("Shutting down DB writer thread pool...")
-        try:
-            self.executor.shutdown(wait=True)
-            print("DB writer thread pool shut down.")
-        except RuntimeError as e:
-            if "after shutdown" in str(e):
-                pass # Ignore expected shutdown error
-    def _save_feed_data(self, symbol: str, feed: dict):
-        now = datetime.now()
-        full_feed = feed.get("fullFeed", {})
-        market = full_feed.get("marketFF") or full_feed.get("indexFF")
-
-        parsed_tick = None
-        parsed_candles = []
-
-        if not market:
-            return None, []
-
-        # 1. Process Tick and associated data
-        ltpc = market.get('ltpc')
-        if ltpc and 'ltp' in ltpc and 'ltt' in ltpc:
-            record = {
-                'timestamp': int(ltpc['ltt']) * 1_000_000,
-                'instrument_key': symbol,
-                'feed_type': 'TICK',
-                'insertion_time': now,
-                'ltp': ltpc.get('ltp'),
-                'ltq': ltpc.get('ltq'),
-                'cp': market.get('cp'),
-                'oi': market.get('oi'),
-                'atp': market.get('atp'),
-                'vtt': market.get('vtt'),
-                'tbq': market.get('tbq'),
-                'tsq': market.get('tsq'),
-            }
-
-            market_level = market.get('marketLevel', {})
-            quotes = market_level.get('bidAskQuote', [])
-            if quotes:
-                record['bid_price_1'] = quotes[0].get('bidP')
-                record['bid_qty_1'] = quotes[0].get('bidQ')
-                record['ask_price_1'] = quotes[0].get('askP')
-                record['ask_qty_1'] = quotes[0].get('askQ')
-
-            option_greeks = full_feed.get('optionGreeks')
-            if option_greeks:
-                record.update({
-                    'delta': option_greeks.get('delta'),
-                    'theta': option_greeks.get('theta'),
-                    'gamma': option_greeks.get('gamma'),
-                    'vega': option_greeks.get('vega'),
-                    'rho': option_greeks.get('rho'),
-                    'iv': option_greeks.get('iv'),
-                })
-
-            try:
-                self.engine.persistence.save_tick_data(record)
-                parsed_tick = record
-            except Exception as e:
-                print(f"Error saving tick data: {e}")
-
-        # 2. Process Candle Data
-        ohlc_list = market.get("marketOHLC", {}).get("ohlc", [])
-        for ohlc in ohlc_list:
-            if "interval" in ohlc:
-                candle_record = {
-                    'timestamp': int(ohlc['ts']) * 1_000_000,
-                    'instrument_key': symbol,
-                    'feed_type': f'CANDLE_{ohlc["interval"]}',
-                    'insertion_time': now,
-                    'open': ohlc.get('open'),
-                    'high': ohlc.get('high'),
-                    'low': ohlc.get('low'),
-                    'close': ohlc.get('close'),
-                    'vtt': ohlc.get('vol')
-                }
-                try:
-                    self.engine.persistence.save_tick_data(candle_record)
-                    parsed_candles.append(candle_record)
-                except Exception as e:
-                    print(int(ohlc['ts']))
-                    print("---------------------")
-                    print(f"Error Process Candle Data saving candle data: {e}")
-                    import traceback
-                    traceback.print_exc()
-
-        return parsed_tick, parsed_candles
-
-    def _extract_ltp_ts(self, ff: dict):
-        """
-        Returns (ltp, ts) or (None, None) if not available
-        """
 
 
-
-        # INDEX
-        if "indexFF" in ff:
-            ltpc = ff["indexFF"].get("ltpc")
-        # EQUITY / FO
-        elif "marketFF" in ff:
-            ltpc = ff["marketFF"].get("ltpc")
-        else:
-            return None, None
-
-        if not ltpc:
-            return None, None
-
-        ltp = ltpc.get("ltp")
-        ltt = ltpc.get("ltt")
-
-        if ltp is None or ltt is None:
-            return None, None
-
-        return float(ltp), int(ltt)
-
-
-    def on_message(self, data: dict):
-        try:
-            feeds = data.get("feeds", {})
-            for symbol, feed in feeds.items():
-                future = self.executor.submit(self._save_feed_data, symbol, feed)
-                future.add_done_callback(
-                    lambda f, s=symbol, fd=feed: self._process_saved_data(f, s, fd)
-                )
-     
-        except RuntimeError as e:
-            if "after shutdown" in str(e):
-                pass # Ignore expected shutdown errors
-       
-
-    def _process_saved_data(self, future, symbol, feed):
-        try:
-            parsed_tick, parsed_candles = future.result()
-        except Exception as e:
-            print(f"Error getting result from DB writer future: {e}")
-            return
-
-        if parsed_tick:
-            tick = Tick(
-                symbol=symbol,
-                ltp=parsed_tick['ltp'],
-                ts=parsed_tick['timestamp'] // 1_000_000,
-                volume=parsed_tick.get('vtt', 0),
-                total_buy_qty=parsed_tick.get('tbq', 0),
-                total_sell_qty=parsed_tick.get('tsq', 0)
-            )
-            self.engine.on_tick(tick)
-
-            # WARMUP CHECK
-            if not self.engine.simulation_mode and symbol not in self.engine.h1_aggregator.h1_candles:
-                try:
-                    self.engine.h1_aggregator.initialize_symbol(symbol)
-                    adv = self.engine.fetcher.calculate_5day_adv(symbol)
-                    if adv > 0:
-                        self.engine.adv_cache[symbol] = adv
-                except Exception as e:
-                    print(f"Warmup failed for {symbol}: {e}")
-
-            # Update order book and footprint
-            ff = feed.get("fullFeed", {})
-            market = ff.get("marketFF") or ff.get("indexFF")
-            if market:
-                self.engine.orderbook.update(symbol, market, tick.ts)
-                last_vol = self.engine.last_vols.get(symbol, tick.volume)
-                trade_vol = int(tick.volume) - int(last_vol)
-                if trade_vol < 0: trade_vol = 0
-                self.engine.last_vols[symbol] = tick.volume
-                ltq = int(parsed_tick.get('ltq', 0))
-                if trade_vol <= 0 and ltq > 0:
-                    trade_vol = ltq
-                if trade_vol > 0:
-                    self.engine.update_footprint(symbol, tick.ltp, trade_vol, tick.ts)
-
-                # Broadcast DOM
-                if self.engine.broadcaster:
-                    ml = market.get("marketLevel", {})
-                    quotes = ml.get("bidAskQuote", [])
-                    bids, asks = {}, {}
-                    for q in quotes:
-                        if "bidP" in q and q["bidP"]: bids[str(q["bidP"])] = q.get("bidQ", 0)
-                        if "askP" in q and q["askP"]: asks[str(q["askP"])] = q.get("askQ", 0)
-
-                    dom_msg = {"type": "dom", "symbol": symbol, "bids": bids, "asks": asks, "ts": tick.ts}
-                    self.engine.broadcaster(symbol, dom_msg)
-
-        for candle_data in parsed_candles:
-            if candle_data['feed_type'] == 'CANDLE_I1':
-                candle_ts = candle_data['timestamp'] // 1_000_000
-                if self.engine.last_candle_ts.get(symbol) == candle_ts:
-                    continue
-
-                candle = Candle(
-                    symbol=symbol,
-                    open=float(candle_data["open"]),
-                    high=float(candle_data["high"]),
-                    low=float(candle_data["low"]),
-                    close=float(candle_data["close"]),
-                    volume= int(v) if (v := candle_data.get("vtt")) is not None else 0,
-                    ts=candle_ts,
-                )
-                self.engine.on_candle_close(candle)
 
 
 # -------------------------
