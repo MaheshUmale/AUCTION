@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tick_data (
     high DOUBLE,
     low DOUBLE,
     close DOUBLE,
-    insertion_time TIMESTAMP
+    insertion_time TIMESTAMP,
+    processed_time TIMESTAMP
 ) timestamp(timestamp) PARTITION BY DAY WAL
 WITH maxUncommittedRows=500000, o3MaxLag=600000000us;
