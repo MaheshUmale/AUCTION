@@ -6,13 +6,13 @@ This project is a trading bot that uses Auction Market Theory to make trading de
 
 The project is organized into the following directories:
 
--   `trading_core`: Contains the core components of the trading engine, including the `LiveAuctionEngine`, data models, and persistence layer.
+-   `api`: Contains the FastAPI backend for the UI.
+-   `configs`: Contains the strategy configuration files.
 -   `data_handling`: Includes modules for fetching and processing historical data.
--   `strategy`: Contains the implementation of the trading strategy, including the `AuctionContext` and other strategy components.
--   `ui`: Includes the Flask-based UI for monitoring trades.
--   `utils`: Contains utility scripts for analyzing backtest results.
--   `data`: Contains historical data files for backtesting.
--   `scripts`: Contains standalone scripts for various tasks, such as backtesting, live trading, and data management.
+-   `frontend`: Contains the HTML and JavaScript for the UI.
+-   `scripts`: Contains the core services for data ingestion, persistence, and strategy management.
+-   `strategy`: Contains the implementation of the trading strategy.
+-   `trading_core`: Contains the core components of the trading engine, including the `LiveAuctionEngine`, data models, and persistence layer.
 
 ## Trading Strategy
 
@@ -21,23 +21,17 @@ The trading strategy is based on a regime-aware model that adapts to the current
 The bot distinguishes between two primary market regimes:
 
 -   **Balanced Market (Mean Reversion):** When the volume profile is bell-shaped and balanced, the bot favors mean-reversion trades.
-    -   **Long Trades:** Entered when the price is at or below the Value Area Low (VAL).
-    -   **Short Trades:** Entered when the price is at or above the Value Area High (VAH).
-
 -   **Unbalanced Market (Trend Following):** When the volume profile is skewed, indicating a trend, the bot favors trend-following trades.
-    -   **Long Trades:** In a bullish trend (where the Point of Control is in the upper half of the value area), long trades are entered on pullbacks to the POC.
-    -   **Short Trades:** In a bearish trend (where the Point of Control is in the lower half of the value area), short trades are entered on rallies to the POC.
 
-This regime-based approach is designed to correct the "wrong side bias" of simpler models and align the bot's behavior with the principles of Auction Market Theory.
+## Running the System
 
-## Backtesting
-
-The `backtester.py` script, located in the `scripts` directory, is used for backtesting the trading strategy. It queries historical tick data from a QuestDB instance and simulates a live WebSocket feed to the trading engine.
+The new architecture is a multi-process system with several services that work together. A single `run.py` script is provided to launch and manage all the necessary services.
 
 ### Prerequisites
 
 -   Python 3
--   QuestDB
+-   Docker
+-   An Upstox trading account and a valid API access token.
 
 ### Installation
 
@@ -52,68 +46,41 @@ The `backtester.py` script, located in the `scripts` directory, is used for back
     pip install -r requirements.txt
     ```
 
-3.  Install and start QuestDB. You can do this with Docker:
+3.  Install and start QuestDB using Docker:
     ```bash
-    docker run -p 9000:9000 -p 8812:8812 questdb/questdb
+    sudo docker run -d -p 9000:9000 -p 8812:8812 questdb/questdb
     ```
-
-### Running the Backtest
-
-To run the backtest, you will need to have a running QuestDB instance with historical tick data. You can then run the following command:
-
-```bash
-python3 scripts/backtester.py --symbol <symbol> --from-date <YYYY-MM-DD> --to-date <YYYY-MM-DD>
-```
-
-The backtesting script will then process the data and print a summary of the trading strategy's performance to the console.
-
-## Live Trading
-
-The `main_live.py` script, located in the `scripts` directory, is used to run the trading bot in a live market environment. It connects to the Upstox WebSocket feed to receive real-time market data.
-
-### Prerequisites
-
--   An Upstox trading account
--   An Upstox API access token
 
 ### Configuration
 
 1.  Open the `config.py` file.
-2.  Replace the placeholder `"your_access_token"` with your actual Upstox API access token.
+2.  Replace the placeholder `ACCESS_TOKEN` with your actual Upstox API access token.
+3.  Modify the `WATCHLIST` and other strategy parameters as needed.
 
-### Running the Live Trading Bot
+### Launching the System
 
-To run the live trading bot, execute the following command:
+To run the entire trading system, execute the following command from the project root:
 
 ```bash
-python3 scripts/main_live.py
+python3 run.py
 ```
 
-The bot will then connect to the Upstox WebSocket feed, and the monitor will print a summary of open and closed trades to the console every 5 seconds.
+This will launch the following services:
 
-## Scripts
+-   **Data Ingestor (`scripts/ingestor.py`):** Connects to the Upstox WebSocket, fetches real-time market data, and publishes it to a ZeroMQ message bus.
+-   **Persistence Service (`scripts/persistor.py`):** Subscribes to the ZeroMQ bus and saves all incoming market data to the QuestDB database.
+-   **Strategy Manager (`scripts/strategy_manager.py`):** Loads the strategy configurations from `configs/strategies.json` and launches each strategy in a separate process.
+-   **API Server (`api/server.py`):** A FastAPI server that subscribes to the ZeroMQ bus and broadcasts market data to the frontend via a WebSocket.
 
-The `scripts` directory contains a collection of standalone Python scripts for various tasks related to the trading bot. Here's a brief overview of the most important ones:
+### Accessing the UI
 
--   `backtester.py`: The main script for running backtests of the trading strategy.
--   `main_live.py`: The main script for running the trading bot in a live market environment.
--   `backfill_ticks.py`: A script for backfilling historical tick data from an external source into QuestDB.
--   `debug_db.py`: A utility script for debugging and inspecting the contents of the QuestDB database.
--   `rehydrate_history.py`: A script for rehydrating historical data from a file into the database.
+Once the system is running, you can access the real-time trading dashboard by opening a web browser and navigating to:
 
-## Dataflow and Replay
+```
+http://localhost:8000
+```
 
-The trading bot is designed to store all incoming WebSocket feed data in a structured format, which allows for efficient querying and high-fidelity backtesting. All feed data, including ticks, candles, and order book updates, is stored in the `tick_data` table in QuestDB.
-
-### Data Storage
-
--   **Table:** `tick_data`
--   **Schema:** The table stores various fields from the WebSocket feed, including LTP, LTQ, open, high, low, close, and order book data. A `feed_type` column distinguishes between different types of data (e.g., `TICK`, `CANDLE_I1`).
-
-
-
-
-
+The dashboard will display a live candlestick chart of the instruments defined in your watchlist.
 
 # NEXT STEPS : FOR JULES
 
@@ -214,7 +181,3 @@ Export to Sheets
 
 Next Step
 Would you like me to write the boilerplate code for the ZeroMQ Data Ingestor that connects to Upstox and pushes data to the QuestDB ILP port?
-
-### Data Replay
-
-The structured data in the `tick_data` table can be queried to reconstruct the market state at any given time. This allows for accurate backtesting and analysis by replaying historical data through the trading engine.
