@@ -25,7 +25,7 @@ The three core services are:
                                |                    |                 |
                                V                    |                 V
                          +------------------+      |           +-------------------+
-                         |     QuestDB      |<-----+           |  Strategy Manager |
+                         |      DuckDB      |<-----+           |  Strategy Manager |
                          +------------------+                  +-------------------+
                                (Persists Data)                   (Subscribes to Data)
                                                                        |
@@ -50,7 +50,7 @@ The data flow is designed to be fast, efficient, and reliable:
 
 1.  **Data Ingestion:** The `ingestor` service connects to the Upstox WebSocket and captures real-time market data, including ticks, candles, and order book updates.
 
-2.  **Distribution & Persistence:** The `ingestor` simultaneously publishes the raw data to a ZeroMQ topic and persists it to a QuestDB time-series database.
+2.  **Distribution & Persistence:** The `ingestor` simultaneously publishes the raw data to a ZeroMQ topic and persists it to a local DuckDB file for high-speed analytical queries.
 
 3.  **Strategy Consumption:** The `strategy_manager` launches each trading strategy in a separate process. Each process subscribes to the ZeroMQ topic to receive the live data feed and generate trading signals.
 
@@ -68,7 +68,7 @@ The data ingestor is a multithreaded service that:
 
 -   Connects to the Upstox WebSocket to receive real-time market data.
 -   Publishes the data to a ZeroMQ message bus for distribution to other services.
--   Persists the data to a QuestDB database for historical analysis and backtesting.
+-   Persists the data to a local DuckDB database for historical analysis and backtesting.
 
 ### `scripts/strategy_manager.py`
 
@@ -93,7 +93,6 @@ The API server is a FastAPI application that:
 -   **`data/`:** Stores historical data for backtesting.
 -   **`data_handling/`:** Contains modules for processing and saving feed data.
 -   **`frontend/`:** Includes the HTML, CSS, and JavaScript files for the frontend UI.
--   **`questdb_scripts/`:** Contains SQL scripts for creating and managing the QuestDB database.
 -   **`scripts/`:** Includes the core service scripts (`ingestor.py`, `strategy_manager.py`) and other utility scripts.
 -   **`strategy/`:** Contains the implementation of the trading strategies.
 -   **`trading_core/`:** Includes the core components of the trading engine, such as the `LiveAuctionEngine` and persistence layer.
@@ -106,8 +105,6 @@ The API server is a FastAPI application that:
 ### Prerequisites
 
 -   Python 3
--   Docker
--   QuestDB
 
 ### Installation
 
@@ -124,12 +121,6 @@ The API server is a FastAPI application that:
     pip install -r requirements.txt
     ```
 
-3.  **Start QuestDB:**
-
-    ```bash
-    docker run -p 9000:9000 -p 8812:8812 -p 9009:9009 questdb/questdb
-    ```
-
 ### Configuration
 
 1.  **Create `config.py`:** Create a `config.py` file in the root directory and add the following, replacing the placeholder values with your actual credentials and settings:
@@ -140,6 +131,9 @@ The API server is a FastAPI application that:
 
     # -- Watchlist --
     WATCHLIST = ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
+
+    # -- Database Path --
+    DUCKDB_PATH = "trading_data.duckdb" # Use ":memory:" for an in-memory database
 
     # -- ZeroMQ Configuration --
     ZMQ_PUB_URL = "tcp://127.0.0.1:5555"
