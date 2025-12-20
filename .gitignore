@@ -16,3 +16,7 @@ env/
 
 # Data
 data/
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
